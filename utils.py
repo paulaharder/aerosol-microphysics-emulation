@@ -1,4 +1,6 @@
 ''' A collection of functions and classes for the neural network emulator'''
+
+from models import Base, SignExtBase, ClassificationNN, DoubleNN
 import torch 
 import torchvision
 import torch.nn as nn
@@ -8,51 +10,140 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from torch.autograd import Variable
 import numpy as np
+from sklearn.metrics import mean_squared_error, r2_score
 import argparse
 import pickle
 from sklearn.metrics import mean_squared_error, r2_score
-from regression_utils_ci import get_inv_scaler_x, get_inv_scaler_y, standard_transform_y_tend_inv
+import csv
+import os
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-stats = pickle.load(open('./data/dataset0/noss_stats_dataset0.p','rb'))
-full_stats = pickle.load(open('./data/dataset0/full_stats_dataset0.p','rb'))
-tend_stats = pickle.load(open('./data/dataset0/tend_stats_dataset0.p','rb'))
-t_mean = Variable(torch.Tensor(tend_stats['ytrain_mean']),requires_grad=True).to(device)
-t_std = Variable(torch.Tensor(tend_stats['ytrain_std']),requires_grad=True).to(device)
-tend_mean = Variable(torch.Tensor(tend_stats['y_log_eps_mean']),requires_grad=True).to(device)
-tend_std = Variable(torch.Tensor(tend_stats['y_log_eps_std']),requires_grad=True).to(device)
-full_mean = Variable(torch.Tensor(tend_stats['X_log_eps_mean']),requires_grad=True).to(device)
-full_std = Variable(torch.Tensor(tend_stats['X_log_eps_std']),requires_grad=True).to(device)
-x_max = Variable(torch.Tensor(tend_stats['xtrain_max']),requires_grad=True).to(device)
-y_max = Variable(torch.Tensor(tend_stats['ytrain_max']),requires_grad=True).to(device)
-y_min = Variable(torch.Tensor(tend_stats['ytrain_min']),requires_grad=True).to(device)
-mu_x = Variable(torch.Tensor(full_stats['xtrain_mean'][13:17]),requires_grad=True).to(device)
-mu_y = Variable(torch.Tensor(tend_stats['ytrain_mean'][5:9]),requires_grad=True).to(device)
-si_x = Variable(torch.Tensor(full_stats['xtrain_std'][13:17]),requires_grad=True).to(device)
-si_y = Variable(torch.Tensor(tend_stats['ytrain_std'][5:9]),requires_grad=True).to(device)
+
 #######arguments
 
 def add_nn_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", default='dataset0', help="choose a data set to use")
-    parser.add_argument("--eval_test", default='val', help="validation of test case")
-    parser.add_argument("--scale_in", default='z', help="choose scaling, log, norm, standard, minmax")
-    parser.add_argument("--scale_out", default='z_tend', help="choose scaling, log,  standard, minmax, logstandard")
-    parser.add_argument("--tendency", type=bool, default=True, help="whether to predict the tendency or not")
+    parser.add_argument("--train", default=True, help="tran or eval with test")
+    parser.add_argument("--signs", default=False, help="needed for log with mass reg.")
+    parser.add_argument("--classification", default=False, help="train class. net")
+    parser.add_argument("--scale", default='z', help="z or log")
+    parser.add_argument("--model", default="standard", help="standard, standard_mass, standard_positivity, standard_log, log_mass, class")
+    parser.add_argument("--model_id", default="standard_test")
+    parser.add_argument("--log", default=False)
     parser.add_argument("--lr", default=0.001, help="learning rate")
-    parser.add_argument("--nlayers", default=2, help="number of hidden layers", type=int)
     parser.add_argument("--width", default=128, help="width of hidden layers")
     parser.add_argument("--loss", default='mse')
     parser.add_argument("--optimizer", default='adam')
     parser.add_argument("--weight_decay", default=1e-9)
     parser.add_argument("--batch_size", default=256)
-    parser.add_argument("--epochs", default=100)
+    parser.add_argument("--epochs", default=1)
     parser.add_argument("--early_stop", default=True)
-    parser.add_argument("--no_ss", default=True)
-    parser.add_argument("--mass_factor", default=1e8)
     return parser.parse_args()
 
+########
+###stats
+def calculate_stats(X_train, y_train, X_test, y_test, args):
+    means = np.mean(y_test[:,:24]+X_test[:,8:], axis=0)
+    X_log_eps = log_transform(X_train)
+    y_log_eps = log_transform(y_train)
+    
+    so4 = np.concatenate((X_train[:,8],X_train[:,9],X_train[:,10],X_train[:,11],X_train[:,12]), axis=0)
+    bc = np.concatenate((X_train[:,13],X_train[:,14],X_train[:,15],X_train[:,16]),axis=0)
+    oc = np.concatenate((X_train[:,17],X_train[:,18],X_train[:,19],X_train[:,20]),axis=0)
+    du = np.concatenate((X_train[:,21],X_train[:,24],X_train[:,22],X_train[:,23]),axis=0)
 
+    so4_mean = np.mean(so4)
+    bc_mean = np.mean(bc)
+    oc_mean = np.mean(oc)  
+    du_mean = np.mean(du) 
+
+    stats = {'xtrain_mean': np.mean(X_train, axis=0),
+            'xtrain_std': np.std(X_train, axis=0),
+            'ytrain_mean': np.mean(y_train, axis=0),
+            'ytrain_std': np.std(y_train, axis=0),
+            'so4_mean':so4_mean,
+            'bc_mean':bc_mean,
+            'oc_mean':oc_mean,
+            'du_mean':du_mean,
+            'X_log_eps_mean':np.mean(X_log_eps,axis=0),
+            'X_log_eps_std': np.std(X_log_eps,axis=0),
+            'y_log_eps_mean':np.mean(y_log_eps,axis=0),
+            'y_log_eps_std': np.std(y_log_eps,axis=0),
+            'means':means
+            }
+
+    return stats
+    
+####################################
+######### TRANSFORMATION ############
+def standard_transform_x(stats, x):
+    return (x-stats['xtrain_mean'])/stats['xtrain_std']
+
+def standard_transform_y(stats, x):
+    return (x-stats['ytrain_mean'])/stats['ytrain_std']
+
+def standard_transform_y_inv(stats, x):
+    return x*stats['ytrain_std']+stats['ytrain_mean']
+
+def log_transform(x):
+    return np.log(np.abs(x)+1e-8)
+
+def exp_transform(x):
+    return np.exp(x)-1e-8
+
+def log_full_norm_transform_x(stats, x):
+    x = log_transform(x)
+    x = (x-stats['X_log_eps_mean'])/stats['X_log_eps_std']
+    return x
+
+def log_tend_norm_transform_y(stats, x):
+    x = log_transform(x)
+    x = (x-stats['y_log_eps_mean'])/stats['y_log_eps_std']
+    return x
+
+def log_tend_norm_transform_y_inv(stats, x):    
+    x = x*stats['y_log_eps_std']+stats['y_log_eps_mean']
+    x = exp_transform(x)
+    return x
+
+#############
+####data loaders
+def create_dataloader(x,y, args):
+    dataset = TensorDataset(torch.Tensor(x),torch.Tensor(y))
+    return DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+
+def create_test_dataloader(x,y, args):
+    dataset = TensorDataset(torch.Tensor(x),torch.Tensor(y))
+    return DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+
+#########
+########model criterion
+
+def get_model(in_features, out_features,args):
+    if args.model == 'standard' or args.model == 'standard_mass' or args.model == 'standard_log':
+        model = Base(in_features, out_features, args.width)
+    elif args.model == 'log_mass':
+        model = SignExtBase(in_features, out_features, width=args.width)
+    elif args.model == 'standard_positivity':
+        model = DoubleNN(in_features, out_features, width=args.width)
+    elif args.model == 'class':
+        model = ClassificationNN(in_features=input_dim, out_features=output_dim, width=args.width)   
+    return model
+
+def get_loss(output, y, args):
+    criterion = nn.MSELoss()
+    if args.loss == 'mse':
+        return criterion(output, y)
+    elif loss_type == 'mse_st_mass':
+        return criterion(output, y)+overall_z_mass(output,y)
+    elif loss_type == 'mse_st_positive':
+        return criterion(output, y)+relu_all(output)
+    elif loss_type == 'mse_log_mass':
+        return criterion(output, y)+torch.mean(mass_log(output))
+    return loss_function
+
+
+#####################
 ######mass calculation
 def mass_log(y):
     x = torch.exp(y[:,:28]*tend_std[:28]+tend_mean[:28])-1e-8
@@ -63,17 +154,9 @@ def mass_log(y):
     mass = so4+bc+oc+du
     return mass
 
-def overall_z_mass(x,y):  
-    so4 = mse(mass_so4(x[:,:5]),mass_so4(y[:,:5]))
-    bc = mse(mass_bc(x[:,5:9]),mass_bc(y[:,5:9]))
-    oc =mse(mass_oc(x[:,9:13]),mass_oc(y[:,9:13]))
-    du = mse(mass_du(x[:,13:17]),mass_du(y[:,13:17]))
-    mass = so4+bc+oc+ du    
-    return mass
-
 def mass_z(y):
     summ = torch.sum(y, dim=1)
-    so4_mass = torch.abs(summ)
+    so4mass = torch.abs(summ)
     return so4_mass
 
 def mass_so4(y):
@@ -100,7 +183,16 @@ def mass_du(y):
     so4_mass = torch.abs(summ)
     return 1e-1*so4_mass
 
+##############
 ########losses
+
+def overall_z_mass(x,y):  
+    so4 = mse(mass_so4(x[:,:5]),mass_so4(y[:,:5]))
+    bc = mse(mass_bc(x[:,5:9]),mass_bc(y[:,5:9]))
+    oc =mse(mass_oc(x[:,9:13]),mass_oc(y[:,9:13]))
+    du = mse(mass_du(x[:,13:17]),mass_du(y[:,13:17]))
+    mass = so4+bc+oc+ du    
+    return mass
 
 def relu_all(x):
     so4_pos = relu_so4(x)
@@ -132,38 +224,15 @@ def relu_wat(x):
     return 1e+0*torch.mean(F.relu(-(x[:,24:28]*t_std[24:28]+t_mean[24:28]))**2)
 
 
-def mass_mse(x, y):
-    x_mass = mass_z(x)
-    y_mass = mass_z(y)
-    return mse(x_mass,y_mass)
-
-
-def get_loss_function(args):
-    loss_type = args.loss
-    if loss_type == 'mse':
-        loss_function = nn.MSELoss()
-    elif loss_type == 'mass_conservation':
-        loss_function = mass_violation_ss
-    elif loss_type == 'log_sqrt':
-        loss_function = log_sqrt_loss
-    elif loss_type == 'mass_log_mse':
-        loss_function = mass_log_mse
-    return loss_function
-
-###scores
-
-
-
-
 #######training
         
-def train_model(model, train_data, test_data, criterion, optimizer, epochs, input_dim, output_dim, args):
+def train_model(model, train_data, test_data, optimizer, input_dim, output_dim, args):
     best = 1e20
     patience = 0
     print(torch.cuda.is_available())
-    for i in range(epochs):
-        model_step(model, train_data, criterion, optimizer, i, epochs, args)
-        val_loss = get_val_loss(model, test_data, criterion, i, epochs, args)
+    for i in range(args.epochs):
+        model_step(model, train_data, optimizer, i, args)
+        val_loss = get_val_loss(model, test_data, i, args)
         checkpoint(model, val_loss, best, input_dim, output_dim, args)
         if args.early_stop:
             is_stop, patience = check_for_early_stopping(val_loss, best, patience)
@@ -171,7 +240,7 @@ def train_model(model, train_data, test_data, criterion, optimizer, epochs, inpu
         if is_stop:
             break
                            
-def model_step(model, train_data, criterion, optimizer, epoch, epochs, args):
+def model_step(model, train_data, optimizer, epoch, args):
     running_loss = 0
     for x, y in train_data:
         x = x.to(device)
@@ -179,14 +248,14 @@ def model_step(model, train_data, criterion, optimizer, epoch, epochs, args):
         model.to(device)
         output = model(x)
         y = y.to(device)
-        loss = criterion(output,y)
+        loss = get_loss(output, y, args)
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
     loss = running_loss / len(train_data)
-    print(epoch, 'train_loss', loss)
+    print(epoch+1, 'train_loss', loss)
 
-def get_val_loss(model, test_data, criterion, epoch, epochs, args):
+def get_val_loss(model, test_data, epoch, args):
     running_val_loss = 0
     model.eval()
     with torch.no_grad():
@@ -194,24 +263,20 @@ def get_val_loss(model, test_data, criterion, epoch, epochs, args):
             x = x.to(device)
             output = model(x)
             y = y.to(device)
-            loss =criterion(output,y)
+            loss = get_loss(output, y, args)
             running_val_loss += loss.item()
     loss = running_val_loss/len(test_data)
-    print(epoch, 'val_loss', loss)
+    print(epoch+1, 'val_loss', loss)
     model.train()
     return loss
-
-def model_name(args):
-    name = args.model_id
-    return name
     
 def checkpoint(model, val_loss, best, input_dim, output_dim, args):
     if val_loss < best:
-        checkpoint = {'model': model, out_features=output_dim, width=args.width),'state_dict': model.state_dict()}
-        name = model_name(args)
-        torch.save(checkpoint, './models/'+name+'.pth')
+        checkpoint = {'model': model,'state_dict': model.state_dict()}
+        if not os.path.exists('./models'):
+            os.makedirs('./models')
+        torch.save(checkpoint, './models/'+args.model_id+'.pth')
         
-
 def check_for_early_stopping(val_loss, best, patience):
     is_stop = False
     if val_loss < best:
@@ -222,30 +287,94 @@ def check_for_early_stopping(val_loss, best, patience):
         is_stop = True  
     return is_stop, patience
         
-def create_dataloader(x,y, args):
-    dataset = TensorDataset(torch.Tensor(x),torch.Tensor(y))
-    return DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+    
+#####
+### create evaluation
 
-def create_test_dataloader(x,y, args):
-    dataset = TensorDataset(torch.Tensor(x),torch.Tensor(y))
-    return DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
-
-def create_report(model, X_test, y_test, args):
+def create_report(model, X_test, y_test, stats, args):
     #predict
     pred = model(torch.Tensor(X_test).to(device))
     pred = pred.cpu().detach().numpy()
     #scale back
-    scale = get_inv_scaler_y(args.scale_out)
-    #if log scale, need signs
-    pred = scale.transform(pred)
-    y_test = scale.transform(y_test)
     
-    r2 = r2_score(pred[:,:4], y_test[:,:4], multioutput='raw_values')
+    pred = standard_transform_y_inv(stats, pred)
+    y_test = standard_transform_y_inv(stats, y_test)
+    #todo if log scale, need signs
+    if args.log:
+        if not os.path.isfile('./data/classes.npy'):
+            print('Warning: Class prediction need to be done before running log case, score will be wrong')
+        else:
+            signs = np.load('./data/classes.npy')
+            pred *= pred
     
+    scores = get_scores(y_test, pred, X_test, stats)
     
-    name = model_name(args)
+    print(scores)
     
-    scores_dict = {'trained_r2': trained_r2,
-                   'tend_r2': r2}
-    
+    args_dict = vars(args)
+    #combine scorees and args dict
+    args_scores_dict = args_dict | scores
+    #save dict
+    save_dict(args_scores_dict, args)
+ 
+                                    
+def save_dict(dictionary, args):
+    w = csv.writer(open('./data/'+args.model_id+'.csv', 'w'))
+    # loop over dictionary keys and values
+    for key, val in dictionary.items():
+        # write every key and value to file
+        w.writerow([key, val])
+        
+#metrics
+
+
+def norm(x, stats):
+    return (x-stats['ytrain_mean'])/stats['ytrain_std']
+
+def masses(y):
+    so4_mass = y[:,0]+y[:,1]+y[:,2]+y[:,3]+y[:,4]
+    bc_mass = y[:,5]+y[:,6]+y[:,7]+y[:,8]
+    oc_mass = y[:,9]+y[:,10]+y[:,11]+y[:,12]
+    du_mass = y[:,13]+y[:,14]+y[:,15]+y[:,16]
+    return np.array([so4_mass, bc_mass, oc_mass, du_mass])
+
+def norm_rmse(true, pred, stats):
+    true_norm = norm(true, stats)
+    pred_norm = norm(pred, stats)
+    rmse=np.sqrt(mean_squared_error(true_norm, pred_norm))
+    return rmse
+
+def mass_middle(pred, stats):
+    mass_mean = np.array([stats['so4_mean'],stats['bc_mean'],stats['oc_mean'],stats['du_mean']])
+    mass = masses(pred[:,:17])
+    mass_means = np.mean(mass, axis=1)/mass_mean
+    return mass_means
+
+def mass_rmse(true,pred, stats):
+    mass_mean = np.array([stats['so4_mean'],stats['bc_mean'],stats['oc_mean'],stats['du_mean']])
+    N = true.shape[0]
+    mass_means = np.zeros((4,))
+    mass = masses(pred[:,:17])
+    for i in range(4):
+        mass_means[i] = np.sqrt(mean_squared_error(np.zeros((N,)),mass[i])) 
+    return np.mean(mass_means/mass_mean)
+
+def neg_mean(full_pred, stats):
+    N = full_pred.shape[0]
+    neg_means = np.zeros((24,))
+    for i in range(24):
+        neg_means[i] = np.sum(full_pred[full_pred[:,i]<0,i], axis=0)/N
+    return np.mean(neg_means/stats["means"]) #stats
+
+def get_scores(true, pred, X_test, stats):
+    r2=  r2_score(true, pred)
+    r2_log =  r2_score(np.log(np.abs(true)+1e-8), np.log(np.abs(pred)+1e-8))
+    rmse =  norm_rmse(true, pred, stats) #take from standardized values
+    mass_biases = mass_middle(pred, stats) #individual masses divided by the respective abs mean
+    masses_rmse = mass_rmse(true, pred, stats)#individual masses divided by the respective abs mean
+    full_pred = pred[:,:24]+X_test[:,8:]
+    full_pred = np.concatenate((full_pred, pred[:,24:]), axis=1)
+    neg_frac = np.mean(full_pred<0)
+    negative_mean = neg_mean(full_pred, stats)
+    return {'R2': r2, 'R2 log': r2_log, 'RMSE': rmse, 'Mass Bias':mass_biases, 'Mass RMSE':masses_rmse,'Negative fraction': neg_frac,'Negative mean' : negative_mean}
     

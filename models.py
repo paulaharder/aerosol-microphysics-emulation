@@ -1,4 +1,9 @@
-######model
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+######models
 
 class Base(nn.Module):
     def __init__(self, in_features, out_features, width):
