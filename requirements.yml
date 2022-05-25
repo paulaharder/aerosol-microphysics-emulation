@@ -1,4 +1,4 @@
-name: cuda--11-1-1--pytorch--1-9-0
+name: aerosol-emulate
 channels:
   - pytorch
   - nvidia
@@ -136,4 +136,4 @@ dependencies:
   - zstd=1.4.9=haebb681_0
   - pip:
     - torchgeometry==0.1.2
-prefix: /home/harder/.conda/envs/cuda--11-1-1--pytorch--1-9-0
+

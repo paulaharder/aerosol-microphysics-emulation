@@ -1,6 +1,6 @@
 ''' A collection of functions and classes for the neural network emulator'''
 
-from models import Base, SignExtBase, ClassificationNN, DoubleNN
+from models import Base, SignExtBase, ClassificationNN, DoubleNN, CompletionNN
 import torch 
 import torchvision
 import torch.nn as nn
@@ -18,26 +18,26 @@ import csv
 import os
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 #######arguments
 
 def add_nn_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train", default=True, help="tran or eval with test")
+    parser.add_argument("--train", default=False, help="tran or eval with test")
     parser.add_argument("--signs", default=False, help="needed for log with mass reg.")
     parser.add_argument("--classification", default=False, help="train class. net")
     parser.add_argument("--scale", default='z', help="z or log")
     parser.add_argument("--model", default="standard", help="standard, standard_mass, standard_positivity, standard_log, log_mass, class")
-    parser.add_argument("--model_id", default="standard_test")
+    parser.add_argument("--model_id", default="standard_test_bigb")
     parser.add_argument("--log", default=False)
     parser.add_argument("--lr", default=0.001, help="learning rate")
     parser.add_argument("--width", default=128, help="width of hidden layers")
     parser.add_argument("--loss", default='mse')
     parser.add_argument("--optimizer", default='adam')
     parser.add_argument("--weight_decay", default=1e-9)
-    parser.add_argument("--batch_size", default=256)
-    parser.add_argument("--epochs", default=1)
-    parser.add_argument("--early_stop", default=True)
+    parser.add_argument("--batch_size", default=32768)
+    parser.add_argument("--epochs", default=100)
+    parser.add_argument("--early_stop", default=False)
+    parser.add_argument("--save_val_scores", default=False)
     return parser.parse_args()
 
 ########
@@ -56,7 +56,7 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
     bc_mean = np.mean(bc)
     oc_mean = np.mean(oc)  
     du_mean = np.mean(du) 
-
+    
     stats = {'xtrain_mean': np.mean(X_train, axis=0),
             'xtrain_std': np.std(X_train, axis=0),
             'ytrain_mean': np.mean(y_train, axis=0),
@@ -71,7 +71,16 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
             'y_log_eps_std': np.std(y_log_eps,axis=0),
             'means':means
             }
-
+    
+    global mu_y
+    global si_y
+    global mu_x
+    global si_x
+    mu_y = Variable(torch.Tensor(stats['ytrain_mean']),requires_grad=True).to(device)
+    si_y = Variable(torch.Tensor(stats['ytrain_std']),requires_grad=True).to(device)
+    mu_x = Variable(torch.Tensor(stats['xtrain_mean']),requires_grad=True).to(device)
+    si_x = Variable(torch.Tensor(stats['xtrain_std']),requires_grad=True).to(device)
+    #print(mu_y.shape, mu_x.shape
     return stats
     
 ####################################
@@ -79,11 +88,14 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
 def standard_transform_x(stats, x):
     return (x-stats['xtrain_mean'])/stats['xtrain_std']
 
+def standard_transform_x_inv(stats, x):
+    return x*stats['xtrain_std']+stats['xtrain_mean']
+
 def standard_transform_y(stats, x):
     return (x-stats['ytrain_mean'])/stats['ytrain_std']
 
 def standard_transform_y_inv(stats, x):
-    return x*stats['ytrain_std']+stats['ytrain_mean']
+    return x[:,:28]*stats['ytrain_std']+stats['ytrain_mean']
 
 def log_transform(x):
     return np.log(np.abs(x)+1e-8)
@@ -127,20 +139,22 @@ def get_model(in_features, out_features,args):
     elif args.model == 'standard_positivity':
         model = DoubleNN(in_features, out_features, width=args.width)
     elif args.model == 'class':
-        model = ClassificationNN(in_features=input_dim, out_features=output_dim, width=args.width)   
+        model = ClassificationNN(in_features=in_features, out_features=out_features, width=args.width)   
+    elif args.model == 'completion':
+        model = CompletionNN(in_features=in_features, out_features=out_features, width=args.width, mu_y=mu_y, si_y=si_y)
     return model
 
 def get_loss(output, y, args):
     criterion = nn.MSELoss()
     if args.loss == 'mse':
         return criterion(output, y)
-    elif loss_type == 'mse_st_mass':
-        return criterion(output, y)+overall_z_mass(output,y)
-    elif loss_type == 'mse_st_positive':
-        return criterion(output, y)+relu_all(output)
-    elif loss_type == 'mse_log_mass':
+    elif args.loss == 'mse_st_mass':
+        return criterion(output[:,:28], y[:,:28])+overall_z_mass(output,y)
+    elif args.loss == 'mse_st_positive':
+        return criterion(output[:,:28], y[:,:28])+relu_all(output)
+    elif args.loss == 'mse_log_mass':
         return criterion(output, y)+torch.mean(mass_log(output))
-    return loss_function
+    
 
 
 #####################
@@ -160,32 +174,32 @@ def mass_z(y):
     return so4_mass
 
 def mass_so4(y):
-    y = y*t_std[:5]+t_mean[:5]
+    y = y*si_y[:5]+mu_y[:5]
     summ = torch.sum(y, dim=1)
     so4_mass = torch.abs(summ)
     return 1e-7*so4_mass
 
 def mass_bc(y):
-    y = y*t_std[5:9]+t_mean[5:9]
+    y = y*si_y[5:9]+mu_y[5:9]
     summ = torch.sum(y, dim=1)
     so4_mass = torch.abs(summ)
     return 2*1e+4*so4_mass
 
 def mass_oc(y):
-    y = y*t_std[9:13]+t_mean[9:13]
+    y = y*si_y[9:13]+mu_y[9:13]
     summ = torch.sum(y, dim=1)
     so4_mass = torch.abs(summ)
     return 2*1e+3*so4_mass
 
 def mass_du(y):
-    y = y*t_std[13:17]+t_mean[13:17]
+    y = y*si_y[13:17]+mu_y[13:17]
     summ = torch.sum(y, dim=1)
     so4_mass = torch.abs(summ)
     return 1e-1*so4_mass
 
 ##############
 ########losses
-
+'''
 def overall_z_mass(x,y):  
     so4 = mse(mass_so4(x[:,:5]),mass_so4(y[:,:5]))
     bc = mse(mass_bc(x[:,5:9]),mass_bc(y[:,5:9]))
@@ -193,6 +207,16 @@ def overall_z_mass(x,y):
     du = mse(mass_du(x[:,13:17]),mass_du(y[:,13:17]))
     mass = so4+bc+oc+ du    
     return mass
+    '''
+
+def overall_z_mass(x,y):  
+    so4 = torch.mean(mass_so4(y[:,:5]))
+    bc = torch.mean(mass_bc(y[:,5:9]))
+    oc = torch.mean(mass_oc(y[:,9:13]))
+    du = torch.mean(mass_du(y[:,13:17]))
+    mass = so4+bc+oc+ du    
+    return mass
+    
 
 def relu_all(x):
     so4_pos = relu_so4(x)
@@ -206,39 +230,54 @@ def relu_all(x):
     return pos
 
 def relu_so4(x):
-    return 1e-11*torch.mean(F.relu(-(x[:,:5]*t_std[:5]+x[:,28:33]*f_std[8:13]+t_mean[:5]+f_mean[8:13]))**2)
+    return 1e-11*torch.mean(F.relu(-(x[:,:5]*si_y[:5]+x[:,28:33]*si_x[8:13]+mu_y[:5]+mu_x[8:13]))**2)
 
 def relu_bc(x):
-    return 1e+6*torch.mean(F.relu(-(x[:,5:9]*t_std[5:9]+x[:,33:37]*f_std[13:17]+t_mean[5:9]+f_mean[13:17]))**2)
+    return 1e+6*torch.mean(F.relu(-(x[:,5:9]*si_y[5:9]+x[:,33:37]*si_x[13:17]+mu_y[5:9]+mu_x[13:17]))**2)
 
 def relu_oc(x):
-    return 1e+7*torch.mean(F.relu(-(x[:,9:13]*t_std[9:13]+x[:,37:41]*f_std[17:21]+t_mean[9:13]+f_mean[17:21]))**2)
+    return 1e+7*torch.mean(F.relu(-(x[:,9:13]*si_y[9:13]+x[:,37:41]*si_x[17:21]+mu_y[9:13]+mu_x[17:21]))**2)
 
 def relu_du(x):
-    return 1e+3*torch.mean(F.relu(-(x[:,13:17]*t_std[13:17]+x[:,41:45]*f_std[21:25]+t_mean[13:17]+f_mean[21:25]))**2)
+    return 1e+3*torch.mean(F.relu(-(x[:,13:17]*si_y[13:17]+x[:,41:45]*si_x[21:25]+mu_y[13:17]+mu_x[21:25]))**2)
 
 def relu_num(x):
-    return 1e-8*torch.mean(F.relu(-(x[:,17:24]*t_std[17:24]+x[:,45:52]*f_std[25:32]+t_mean[17:24]+f_mean[25:32]))**2)
+    return 1e-8*torch.mean(F.relu(-(x[:,17:24]*si_y[17:24]+x[:,45:52]*si_x[25:32]+mu_y[17:24]+mu_x[25:32]))**2)
 
 def relu_wat(x):
-    return 1e+0*torch.mean(F.relu(-(x[:,24:28]*t_std[24:28]+t_mean[24:28]))**2)
+    return 1e+0*torch.mean(F.relu(-(x[:,24:28]*si_y[24:28]+mu_y[24:28]))**2)
 
 
 #######training
         
-def train_model(model, train_data, test_data, optimizer, input_dim, output_dim, args):
+def train_model(model, train_data, test_data, optimizer, input_dim, output_dim, X_test, y_test, stats, args):
     best = 1e20
     patience = 0
     print(torch.cuda.is_available())
+    is_stop = False
+    if args.save_val_scores:
+        val_r2 = []
+        val_mse = []
+        val_mass = []
+        val_neg = []
     for i in range(args.epochs):
         model_step(model, train_data, optimizer, i, args)
         val_loss = get_val_loss(model, test_data, i, args)
+        if args.save_val_scores:
+            r2, mse, mass, neg = get_val_scores(model, X_test, y_test, i, stats, args)
+            val_r2.append(r2)
+            val_mse.append(mse)
+            val_mass.append(mass)
+            val_neg.append(neg)
+            print(r2, mse, mass, neg)
         checkpoint(model, val_loss, best, input_dim, output_dim, args)
         if args.early_stop:
             is_stop, patience = check_for_early_stopping(val_loss, best, patience)
         best = np.minimum(best, val_loss)
         if is_stop:
             break
+    if args.save_val_scores:
+        save_validation_scores(val_r2, val_mse, val_mass, val_neg, args)
                            
 def model_step(model, train_data, optimizer, epoch, args):
     running_loss = 0
@@ -286,7 +325,53 @@ def check_for_early_stopping(val_loss, best, patience):
     if patience ==5:
         is_stop = True  
     return is_stop, patience
-        
+
+def get_val_scores(model, X_test, y_test, epoch, stats, args):
+    mse = 0
+    r2 = 0
+    mass = 0
+    neg = 0
+    model.eval()
+    pred = model(torch.Tensor(X_test).to(device))
+    pred = pred.cpu().detach().numpy()
+    #scale back
+    
+    pred = standard_transform_y_inv(stats, pred)
+    y_test = standard_transform_y_inv(stats, y_test)
+    X_test = standard_transform_x_inv(stats, X_test)
+    
+    scores = get_scores(y_test, pred, X_test, stats)
+    '''
+    with torch.no_grad():
+        for x, y in test_data:
+            x = x.to(device)
+            pred = model(x)
+            y = y.to(device)
+            pred = pred.cpu().detach().numpy()
+            y = y.cpu().detach().numpy()
+            x = x.cpu().detach().numpy()
+            #scale back
+            x = standard_transform_x_inv(stats, x)
+            pred = standard_transform_y_inv(stats, pred)
+            y = standard_transform_y_inv(stats, y)
+            full_pred = pred[:,:24]+x[:,8:]
+            full_pred = np.concatenate((full_pred, pred[:,24:]), axis=1)
+            mse += norm_rmse(y, pred, stats)
+            r2 += r2_score(y, pred)
+            mass += mass_rmse(y, pred, stats)
+            neg += np.mean(full_pred<0)
+    '''
+    
+
+    return scores["R2"], scores["RMSE"], scores["Mass RMSE"], scores["Negative fraction"]
+
+def save_validation_scores(r2, mse, mass, neg, args):
+    if not os.path.exists('./data/epoch_scores'):
+        os.makedirs('./data/epoch_scores')
+    np.save('./data/epoch_scores/'+args.model_id+'_epoch_r2_scores.npy', np.array(r2))
+    np.save('./data/epoch_scores/'+args.model_id+'_epoch_rmse_scores.npy', np.array(mse))
+    np.save('./data/epoch_scores/'+args.model_id+'_epoch_mass_scores.npy', np.array(mass))
+    np.save('./data/epoch_scores/'+args.model_id+'_epoch_neg_scores.npy', np.array(neg))
     
 #####
 ### create evaluation
@@ -298,14 +383,16 @@ def create_report(model, X_test, y_test, stats, args):
     #scale back
     
     pred = standard_transform_y_inv(stats, pred)
+    np.save('./data/prediction.npy',pred)
     y_test = standard_transform_y_inv(stats, y_test)
+    X_test = standard_transform_x_inv(stats, X_test)
     #todo if log scale, need signs
     if args.log:
         if not os.path.isfile('./data/classes.npy'):
             print('Warning: Class prediction need to be done before running log case, score will be wrong')
         else:
             signs = np.load('./data/classes.npy')
-            pred *= pred
+            pred *= signs
     
     scores = get_scores(y_test, pred, X_test, stats)
     
@@ -319,7 +406,7 @@ def create_report(model, X_test, y_test, stats, args):
  
                                     
 def save_dict(dictionary, args):
-    w = csv.writer(open('./data/'+args.model_id+'.csv', 'w'))
+    w = csv.writer(open('./data/'+'train_'+str(args.train)+'_'+args.model_id+'.csv', 'w'))
     # loop over dictionary keys and values
     for key, val in dictionary.items():
         # write every key and value to file

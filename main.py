@@ -27,18 +27,17 @@ def main(args):
     else:
         X_test = np.load('./data/aerosol_emulation_data/X_test.npy')
         y_test = np.load('./data/aerosol_emulation_data/y_test.npy')
-        
-    #calculate tendencies
-    y_train[:,:26] -= X_train[:,8:]
-    y_test[:,:26] -= X_test[:,8:]
-    
-    #remove sea salt
-    y_train = np.delete(y_train, [13,14],axis=1)
-    y_test = np.delete(y_test, [13,14],axis=1)
-    X_train = np.delete(X_train, [21,22],axis=1)
+       
+    X_train = np.delete(X_train, [21,22],axis=1) #todo: change dataset and then remove this
     X_test = np.delete(X_test, [21,22],axis=1)
+    #calculate tendencies
+    y_train[:,:24] -= X_train[:,8:]
+    y_test[:,:24] -= X_test[:,8:]
     
+    
+    print(X_train.shape)
     stats = calculate_stats(X_train, y_train, X_test, y_test, args)
+    
     
     if args.signs:
         y_train_sign = np.sign(y_train)
@@ -75,7 +74,7 @@ def main(args):
     
     if args.train:
         optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        train_model(model=model, train_data=train_data, test_data=test_data, optimizer=optimizer, input_dim=input_dim, output_dim=output_dim, args=args)
+        train_model(model=model, train_data=train_data, test_data=test_data, optimizer=optimizer, input_dim=input_dim, output_dim=output_dim, stats=stats, X_test=X_test, y_test=y_test, args=args)
     
     model = get_model(in_features=input_dim, out_features=output_dim, args=args) 
     model.load_state_dict(torch.load('./models/'+args.model_id+'.pth') ['state_dict'])
@@ -86,3 +85,5 @@ def main(args):
 if __name__ == "__main__":
     args = add_nn_arguments()
     main(args)
+    
+    
