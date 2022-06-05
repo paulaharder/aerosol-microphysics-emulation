@@ -3,15 +3,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+
 ######models
 
 class Base(nn.Module):
     def __init__(self, in_features, out_features, width):
         super(Base, self).__init__()        
         self.fc1 = nn.Linear(in_features=in_features, out_features=width)
-        self.act1 = nn.Tanh()
+        self.act1 = nn.ReLU()
         self.fc2 = nn.Linear(in_features=width, out_features=width)
-        self.act2 = nn.Tanh()
+        self.act2 = nn.ReLU()
         self.fc3 = nn.Linear(in_features=width, out_features=out_features)
     def forward(self, x):
         x = self.fc1(x)
@@ -59,9 +60,9 @@ class ClassificationNN(nn.Module):
         return x
     
 #outputs inputs as well for positivity enforcement
-class DoubleNN(nn.Module):
+class PositivityNN(nn.Module):
     def __init__(self, in_features, out_features, width):
-        super(DoubleNN, self).__init__()        
+        super(PositivityNN, self).__init__()        
         self.fc1 = nn.Linear(in_features=in_features, out_features=width)
         self.act1 = nn.ReLU()
         self.fc2 = nn.Linear(in_features=width, out_features=width)
@@ -94,17 +95,36 @@ class CompletionLayer(nn.Module):
 
     
 class CorrectionLayer(nn.Module):
-    def __init__(self):
-        super(CompletionLayer, self).__init__()
+    def __init__(self, mu_y, si_y, mu_x, si_x):
+        super(CorrectionLayer, self).__init__()
+        self.mu_y = mu_y
+        self.si_y = si_y
+        self.mu_x = mu_x
+        self.si_x = si_x
+        self.relu1 = nn.ReLU()
+        self.relu2 = nn.ReLU()
         
     def forward(self,x):
-        neg = nn.ReLU(-(x[:,:28]*si_y+x[:,28:]*si_x+mu_y+mu_x[8:]))
-        x_out = neg - x     
-        return x_out
+        print(x.shape, self.mu_y.shape, self.si_y.shape, self.mu_x.shape, self.si_x.shape)  
+        y_orig = x[:,:28]*self.si_y[:28]+self.mu_y[:28] #output in original scal
+        print('x',x[:10,28])
+        x_orig = x[:,28:]*self.si_x[8:]+self.mu_x[8:] #input in orginal scale
+        print('x_orig',x_orig[:10,0])
+        print(self.si_x[8], self.mu_x[8])
+        pos = self.relu1(y_orig[:,:24]+x_orig)
+        #x[:,:24] = ((pos - x_orig  )-self.mu_y[:24])/self.si_y[:24]   
+        x[:,:24] = pos - x_orig 
+        t = x[:,:24]+x_orig
+        print(t.min())
+        print(t[:10,0],x[:10,0],x_orig[:10,0])
+        x[:,24:28] = self.relu2(y_orig[:,24:28])
+        #x[:,24:28] = (self.relu2(y_orig[:,24:28])-self.mu_y[24:28])/self.si_y[24:28]
+        #print(x[:,24:28]*self.si_y[24:28]+self.mu_y[24:28])
+        return x[:,:28]
     
     
 class CompletionNN(nn.Module):
-    def __init__(self, in_features, out_features, width, mu_y, si_y):
+    def __init__(self, in_features, out_features, width, mu_y, si_y, activate_completion):
         super(CompletionNN, self).__init__()        
         self.fc1 = nn.Linear(in_features=in_features, out_features=width)
         self.act1 = nn.ReLU()
@@ -112,14 +132,36 @@ class CompletionNN(nn.Module):
         self.act2 = nn.ReLU()
         self.fc3 = nn.Linear(in_features=width, out_features=out_features)
         self.completion = CompletionLayer(mu_y, si_y)
+        self.completion_active = activate_completion
     def forward(self, x):
         x = self.fc1(x)
         x = self.act1(x)
         x = self.fc2(x)
         x = self.act2(x)
         x = self.fc3(x)
-        x_out = self.completion(x)
-        return x_out
+        if self.completion_active:
+            x = self.completion(x)
+        return x
+    
+class CorrectionNN(nn.Module):
+    def __init__(self, in_features, out_features, width, mu_y, si_y, mu_x, si_x, activate_correction):
+        super(CorrectionNN, self).__init__()        
+        self.fc1 = nn.Linear(in_features=in_features, out_features=width)
+        self.act1 = nn.ReLU()
+        self.fc2 = nn.Linear(in_features=width, out_features=width)
+        self.act2 = nn.ReLU()
+        self.fc3 = nn.Linear(in_features=width, out_features=out_features)
+        self.correction = CorrectionLayer(mu_y, si_y, mu_x, si_x)
+        self.correction_active = activate_correction
+    def forward(self, x_in):
+        x = self.fc1(x_in)
+        x = self.act1(x)
+        x = self.fc2(x)
+        x = self.act2(x)
+        x = self.fc3(x)
+        if self.correction_active:
+            x = self.correction(torch.cat((x, x_in[:,8:]), dim=1) )
+        return x
 
         
         
