@@ -105,21 +105,13 @@ class CorrectionLayer(nn.Module):
         self.relu2 = nn.ReLU()
         
     def forward(self,x):
-        print(x.shape, self.mu_y.shape, self.si_y.shape, self.mu_x.shape, self.si_x.shape)  
         y_orig = x[:,:28]*self.si_y[:28]+self.mu_y[:28] #output in original scal
-        print('x',x[:10,28])
         x_orig = x[:,28:]*self.si_x[8:]+self.mu_x[8:] #input in orginal scale
-        print('x_orig',x_orig[:10,0])
-        print(self.si_x[8], self.mu_x[8])
         pos = self.relu1(y_orig[:,:24]+x_orig)
-        #x[:,:24] = ((pos - x_orig  )-self.mu_y[:24])/self.si_y[:24]   
         x[:,:24] = pos - x_orig 
-        t = x[:,:24]+x_orig
-        print(t.min())
-        print(t[:10,0],x[:10,0],x_orig[:10,0])
+        x[:,:24] = (x[:,:24]-self.mu_y[:24])/self.si_y[:24]      
         x[:,24:28] = self.relu2(y_orig[:,24:28])
-        #x[:,24:28] = (self.relu2(y_orig[:,24:28])-self.mu_y[24:28])/self.si_y[24:28]
-        #print(x[:,24:28]*self.si_y[24:28]+self.mu_y[24:28])
+        x[:,24:28] = (self.relu2(y_orig[:,24:28])-self.mu_y[24:28])/self.si_y[24:28]
         return x[:,:28]
     
     
@@ -152,7 +144,7 @@ class CorrectionNN(nn.Module):
         self.act2 = nn.ReLU()
         self.fc3 = nn.Linear(in_features=width, out_features=out_features)
         self.correction = CorrectionLayer(mu_y, si_y, mu_x, si_x)
-        self.correction_active = activate_correction
+        self.correction_active = False
     def forward(self, x_in):
         x = self.fc1(x_in)
         x = self.act1(x)

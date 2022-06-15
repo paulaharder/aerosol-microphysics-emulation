@@ -37,7 +37,7 @@ To run the completion model (guarenteed mass conservation) run
 $ python main.py --model completion --model_id completion_test
 ```
 
-There is a bug for this case, will be fixed soon: To run the correction model (guarenteed positive predictions) run
+To run the correction model (guarenteed positive predictions) run
 
 ```sh
 $ python main.py --model correction --model_id correction_test
@@ -66,6 +66,8 @@ then
 ```sh
 $ python main.py --scale log --model_id log_test
 ```
+
+If you are using the old dataset (https://zenodo.org/record/5837936) use --old_data True
 
 #### Run inference
 

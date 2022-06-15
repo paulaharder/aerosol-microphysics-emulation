@@ -18,8 +18,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def main(args):
     #loading data
     print('loading data...')    
-    X_train = np.load('./data/aerosol_emulation_data/X_train.npy')
-    y_train = np.load('./data/aerosol_emulation_data/y_train.npy')  
+    X_train = np.load('./data/aerosol_emulation_data/X_val.npy') #change!!
+    y_train = np.load('./data/aerosol_emulation_data/y_val.npy')  #change!!
     
     if args.mode == 'train':
         X_test = np.load('./data/aerosol_emulation_data/X_val.npy')
@@ -27,9 +27,10 @@ def main(args):
     else:
         X_test = np.load('./data/aerosol_emulation_data/X_test.npy')
         y_test = np.load('./data/aerosol_emulation_data/y_test.npy')
-       
-    X_train = np.delete(X_train, [21,22],axis=1) #todo: change dataset and then remove this!!!
-    X_test = np.delete(X_test, [21,22],axis=1) #todo: change dataset and remove this!!!
+    
+    if args.old_data:
+        X_train = np.delete(X_train, [21,22],axis=1) 
+        X_test = np.delete(X_test, [21,22],axis=1)
     #calculate tendencies
     y_train[:,:24] -= X_train[:,8:]
     y_test[:,:24] -= X_test[:,8:]

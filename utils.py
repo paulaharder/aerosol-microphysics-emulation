@@ -34,9 +34,10 @@ def add_nn_arguments():
     parser.add_argument("--optimizer", default='adam')
     parser.add_argument("--weight_decay", default=1e-9)
     parser.add_argument("--batch_size", default=256)
-    parser.add_argument("--epochs", default=1)
+    parser.add_argument("--epochs", default=100)
     parser.add_argument("--early_stop", default=False)
     parser.add_argument("--save_val_scores", default=False)
+    parser.add_argument("--old_data",default=False)
     return parser.parse_args()
 
 ########
@@ -75,6 +76,7 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
     global si_y
     global mu_x
     global si_x
+    
     mu_y = Variable(torch.Tensor(stats['ytrain_mean']),requires_grad=True).to(device)
     si_y = Variable(torch.Tensor(stats['ytrain_std']),requires_grad=True).to(device)
     mu_x = Variable(torch.Tensor(stats['xtrain_mean']),requires_grad=True).to(device)
@@ -364,13 +366,11 @@ def create_report(model, X_test, y_test, stats, args):
         scores = get_class_scores(y_test, pred)
         
     else:
-        if not args.model == 'correction':
-            if args.scale == 'z':
-                pred = standard_transform_y_inv(stats, pred)
-            elif args.scale == 'log':
-                pred = log_tend_norm_transform_y_inv(stats, pred)
-            
-        np.save('./data/prediction.npy',pred)
+        
+        if args.scale == 'z':
+            pred = standard_transform_y_inv(stats, pred)
+        elif args.scale == 'log':
+            pred = log_tend_norm_transform_y_inv(stats, pred)
         if args.scale == 'z':
             y_test = standard_transform_y_inv(stats, y_test)
             X_test = standard_transform_x_inv(stats, X_test)
@@ -383,7 +383,10 @@ def create_report(model, X_test, y_test, stats, args):
             else:
                 signs = np.load('./data/classes.npy')
                 pred *= signs
-
+                
+        if args.model == 'correction':
+            pred = correction(pred, X_test[:,8:])
+        np.save('./data/prediction.npy',pred)
         scores = get_scores(y_test, pred, X_test, stats)
 
     print(scores)
@@ -450,9 +453,6 @@ def get_scores(true, pred, X_test, stats):
     mass_biases = mass_middle(pred, stats) #individual masses divided by the respective abs mean
     masses_rmse = mass_rmse(true, pred, stats)#individual masses divided by the respective abs mean
     full_pred = pred[:,:24]+X_test[:,8:]
-    #print(full_pred[:10,0],pred[:10,0],X_test[:10,8])
-    #print(full_pred.min())
-    #full_pred = np.concatenate((full_pred, pred[:,24:]), axis=1)
     neg_frac = np.zeros((24,1))
     for i in range(24):
         neg_frac[i] = np.mean(full_pred[:,i]<0)
@@ -500,5 +500,15 @@ def get_classes(signs):
     y_signs[:,22] = -1
     y_signs[:,23] = -1
     return y_signs
+
+def correction(y, x):
+    pos = numpy_relu(y[:,:24]+x)
+    y[:,24:] = numpy_relu(y[:,24:])
+    y[:,:24] = pos - x
+    return y
+
+
+def numpy_relu(x):
+    return x * (x > 0)
     
     
