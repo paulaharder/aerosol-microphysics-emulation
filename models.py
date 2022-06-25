@@ -7,19 +7,20 @@ import numpy as np
 ######models
 
 class Base(nn.Module):
-    def __init__(self, in_features, out_features, width):
+    def __init__(self, in_features, out_features, width, depth=2):
         super(Base, self).__init__()        
-        self.fc1 = nn.Linear(in_features=in_features, out_features=width)
-        self.act1 = nn.ReLU()
-        self.fc2 = nn.Linear(in_features=width, out_features=width)
-        self.act2 = nn.ReLU()
-        self.fc3 = nn.Linear(in_features=width, out_features=out_features)
+        self.fc_in = nn.Linear(in_features=in_features, out_features=width)
+        self.hidden_layers = nn.ModuleList()
+        for i in range(depth -1):
+            self.hidden_layers.append(nn.ReLU())
+            self.hidden_layers.append(nn.Linear(in_features=width, out_features=width))
+            self.hidden_layers.append(nn.ReLU())
+        self.fc_out = nn.Linear(in_features=width, out_features=out_features)
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.act1(x)
-        x = self.fc2(x)
-        x = self.act2(x)
-        x = self.fc3(x)
+        x = self.fc_in(x)
+        for layer in self.hidden_layers:
+            x = layer(x)
+        x = self.fc_out(x)
         return x
     
 #base network concatenating the signs for log case

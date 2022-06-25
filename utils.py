@@ -29,7 +29,8 @@ def add_nn_arguments():
     parser.add_argument("--model_id", default="standard_test")
     parser.add_argument("--log", default=False)
     parser.add_argument("--lr", default=0.001, help="learning rate")
-    parser.add_argument("--width", default=128, help="width of hidden layers")
+    parser.add_argument("--width", default=128, type=int, help="width of hidden layers")
+    parser.add_argument("--depth", default=2, help="number layers")
     parser.add_argument("--loss", default='mse')
     parser.add_argument("--optimizer", default='adam')
     parser.add_argument("--weight_decay", default=1e-9)
@@ -452,13 +453,12 @@ def get_scores(true, pred, X_test, stats):
     rmse =  norm_rmse(true, pred, stats) #take from standardized values
     mass_biases = mass_middle(pred, stats) #individual masses divided by the respective abs mean
     masses_rmse = mass_rmse(true, pred, stats)#individual masses divided by the respective abs mean
-    full_pred = pred[:,:24]+X_test[:,8:]
-    neg_frac = np.zeros((24,1))
-    for i in range(24):
-        neg_frac[i] = np.mean(full_pred[:,i]<0)
-    neg_frac2 = np.mean(pred[:,24:]<0)
+    full_pred = np.zeros_like(pred)
+    full_pred[:,:24] = pred[:,:24]+X_test[:,8:]
+    full_pred[:,24:] = pred[:,24:]
+    neg_frac = np.mean(full_pred<0)
     negative_mean = neg_mean(full_pred, stats)
-    return {'R2': r2, 'R2 log': r2_log, 'RMSE': rmse, 'Mass Bias':mass_biases, 'Mass RMSE':masses_rmse,'Negative fraction': neg_frac,'Negative fraction2': neg_frac2,'Negative mean' : negative_mean}
+    return {'R2': r2, 'R2 log': r2_log, 'RMSE': rmse, 'Mass Bias':mass_biases, 'Mass RMSE':masses_rmse,'Negative fraction': neg_frac,'Negative mean' : negative_mean}
 
 
 def get_class_scores(y_val_cl, pred_cl):

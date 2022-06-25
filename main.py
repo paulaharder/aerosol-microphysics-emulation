@@ -18,8 +18,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def main(args):
     #loading data
     print('loading data...')    
-    X_train = np.load('./data/aerosol_emulation_data/X_val.npy') #change!!
-    y_train = np.load('./data/aerosol_emulation_data/y_val.npy')  #change!!
+    X_train = np.load('./data/aerosol_emulation_data/X_train.npy')
+    y_train = np.load('./data/aerosol_emulation_data/y_train.npy')  
     
     if args.mode == 'train':
         X_test = np.load('./data/aerosol_emulation_data/X_val.npy')
