@@ -1,5 +1,15 @@
 # NeuralM7: Physics-Informed Learning of Aerosol Microphysics
 
+If you using our code, consider citing our preprint:
+```sh
+@misc{harder2022,
+  url = {https://arxiv.org/abs/2207.11786}, 
+  author = {Harder, Paula and Watson-Parris, Duncan and Stier, Philip and Strassel, Dominik and Gauger, Nicolas R. and Keuper, Janis},
+  title = {Physics-Informed Learning of Aerosol Microphysics},
+  year = {2022},
+}
+```
+
 ## How to run the code
 
 Clone the repository and install the requirements
