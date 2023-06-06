@@ -2,12 +2,41 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-
+torch.autograd.set_detect_anomaly(True)
 
 ######models
+'''class Base(nn.Module):
+    def __init__(self, in_features, out_features, width, depth, contraint):
+        super(Base, self).__init__()        
+        self.fc_in = nn.Linear(in_features=in_features, out_features=width)
+        self.act_1 = nn.ReLU()
+        self.layer_1 = nn.Linear(in_features=width, out_features=width)
+        self.act_2 = nn.ReLU()
+        self.layer_2 = nn.Linear(in_features=width, out_features=width)
+        self.act_3 = nn.ReLU()    
+        self.fc_out = nn.Linear(in_features=width, out_features=out_features)
+        #self.act_4 = nn.ReLU()
+    def forward(self, x):
+        x = self.fc_in(x)
+        x = self.act_1(x)
+        x = self.layer_1(x)
+        x = self.act_2(x)
+        #x = self.layer_2(x)
+        #x = self.act_3(x)
+        x = self.fc_out(x)
+        #x = self.act_4(x)
+        return x'''
+
+class AddDownscaleConstraints(nn.Module):
+    def __init__(self):
+        super(AddDownscaleConstraints, self).__init__()
+       
+    def forward(self, y, x):
+        out =y+ x[:,11:] - torch.sum(y)
+        return out
 
 class Base(nn.Module):
-    def __init__(self, in_features, out_features, width, depth=2):
+    def __init__(self, in_features, out_features, width, depth, constraint):
         super(Base, self).__init__()        
         self.fc_in = nn.Linear(in_features=in_features, out_features=width)
         self.hidden_layers = nn.ModuleList()
@@ -16,11 +45,17 @@ class Base(nn.Module):
             self.hidden_layers.append(nn.Linear(in_features=width, out_features=width))
             self.hidden_layers.append(nn.ReLU())
         self.fc_out = nn.Linear(in_features=width, out_features=out_features)
-    def forward(self, x):
-        x = self.fc_in(x)
+        self.constraints = False
+        if constraint=='add':
+            self.constraints_layer = AddDownscaleConstraints()
+            self.constraints  = True
+    def forward(self, x_in):
+        x = self.fc_in(x_in)
         for layer in self.hidden_layers:
             x = layer(x)
         x = self.fc_out(x)
+        if self.constraints:
+            x = self.constraints_layer(x,x_in)
         return x
     
 #base network concatenating the signs for log case
