@@ -26,7 +26,7 @@ def add_nn_arguments():
     parser.add_argument("--signs", default=False, help="needed for log with mass reg.")
     parser.add_argument("--scale", default='z', help="z or log")
     parser.add_argument("--model", default="standard", help="standard, completion, correction, positivity, standard_log, log_mass, classification")
-    parser.add_argument("--model_id", default="opt_loc128_b9")
+    parser.add_argument("--model_id", default="randcompl_rand_z_0")
     parser.add_argument("--log", default=False)
     parser.add_argument("--lr", default=0.001, help="learning rate")
     parser.add_argument("--width", default=128, type=int, help="width of hidden layers")
@@ -34,16 +34,16 @@ def add_nn_arguments():
     parser.add_argument("--loss", default='mse')
     parser.add_argument("--optimizer", default='adam')
     parser.add_argument("--weight_decay", default=1e-9)
-    parser.add_argument("--batch_size", default=2**9)
+    parser.add_argument("--batch_size", default=2**12)
     parser.add_argument("--epochs", default=100)
     parser.add_argument("--early_stop", default=False)
     parser.add_argument("--save_val_scores", default=False)
     parser.add_argument("--old_data",default=False)
     parser.add_argument("--tend_full",default='tend')
-    parser.add_argument("--alpha",default=0.999)
-    parser.add_argument("--single",default='all')
+    parser.add_argument("--alpha",default=0.99)
+    parser.add_argument("--single",default='randcompl')
     parser.add_argument("--constraint",default='none')
-    parser.add_argument("--dataset",default='dataset15')
+    parser.add_argument("--dataset",default='dataset13')
     return parser.parse_args()
 
 def get_single_scores(true, pred, X_test, stats, args):
@@ -139,6 +139,19 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
     y_species_std[9:13] = yoc_std 
     y_species_std[13:17] = ydu_std 
     
+   
+    
+    y_species_min = np.min(y_train, axis=0)
+    y_species_min[:5] = np.min(y_train[:,:5]) 
+    y_species_min[5:9] = np.min(y_train[:,5:9])
+    y_species_min[9:13] = np.min(y_train[:,9:13])
+    y_species_min[13:17] = np.min(y_train[:,13:17])
+    y_species_max = np.max(y_train, axis=0)
+    y_species_max[:5] = np.max(y_train[:,:5]) 
+    y_species_max[5:9] = np.max(y_train[:,5:9])
+    y_species_max[9:13] = np.max(y_train[:,9:13])
+    y_species_max[13:17] = np.max(y_train[:,13:17]) 
+    
     inds = [10]+[i for i in range(12,35)]
     stats = {'xtrain_mean': np.mean(X_train, axis=0),
             'xtrain_std': np.std(X_train, axis=0),
@@ -152,6 +165,8 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
             'ytrain_max': np.max(y_train, axis=0),
              'yspecies_std': y_species_std,
             'yspecies_mean': y_species_mean,
+             'yspecies_max': y_species_max,
+            'yspecies_min': y_species_min,
              #'tend_mean': np.mean(y_train[:,:24]-X_train[:,inds], axis=0),
             #'tend_std': np.std(y_train[:,:24]-X_train[:,inds], axis=0),
              #'bc_mean':np.mean(y_train),
@@ -160,6 +175,14 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
             'bc_mean':bc_mean,
             'oc_mean':oc_mean,
             'du_mean':du_mean,
+             'yso4_mean':yso4_mean,
+            'ybc_mean':ybc_mean,
+            'yoc_mean':yoc_mean,
+            'ydu_mean':ydu_mean,
+             'yso4_std':yso4_std,
+            'ybc_std':ybc_std,
+            'yoc_std':yoc_std,
+            'ydu_std':ydu_std,
             'X_log_eps_mean':np.mean(X_log_eps,axis=0),
             'X_log_eps_std': np.std(X_log_eps,axis=0),
             'y_log_eps_mean':np.mean(y_log_eps,axis=0),
@@ -200,6 +223,12 @@ def species_z_transform_y(stats, x):
 
 def species_z_transform_y_inv(stats, x):
     return x[:,:28]*stats['yspecies_std']+stats['yspecies_mean']
+
+def species_n_transform_y(stats, x):
+    return (x-stats['yspecies_min'])/(stats['yspecies_max']-stats['yspecies_min'])
+
+def species_n_transform_y_inv(stats, x):
+    return x[:,:28]*(stats['yspecies_max']-stats['yspecies_min'])+stats['yspecies_min']
 
 def minmax_transform_x(stats, x):
     return (x-stats['xtrain_min'])/(stats['xtrain_max']-stats['xtrain_min'])
@@ -260,7 +289,7 @@ def create_test_dataloader(x,y, args):
 
 def get_model(in_features, out_features,args, constraints_active):
     if args.model == 'standard' or args.model == 'standard_log':
-        model = Base(in_features, out_features, args.width, args.depth, args.constraint)
+        model = Base(in_features, out_features, args.width, args.depth, args.constraint, mu_y, si_y)
     elif args.model == 'log_mass':
         model = SignExtBase(in_features, out_features, width=args.width)
     elif args.model == 'positivity':
@@ -297,7 +326,7 @@ def get_loss(output, y, args, x, stats):
         return (1-args.alpha)*criterion(output[:,:28], y[:,:28])+args.alpha*crit2(tend_output, tend_y)
     elif args.loss == 'mse_mass':
         return args.alpha*criterion(output[:,:28], y[:,:28]), (1-args.alpha)*overall_z_mass(output, args.scale, stats)
-    elif args.loss == 'mse_positivity':
+    elif args.loss == 'mse_relu':
         return criterion(output[:,:28], y[:,:28])+relu_all(output)
     elif args.loss == 'mse_log_mass':
         return criterion(output, y)+torch.mean(mass_log(output))
@@ -349,11 +378,20 @@ def mass_du(y):
 def species_mass(y, stats):
     so4_mu = Variable(torch.Tensor(stats['yso4_mean']),requires_grad=True).to(device)
     so4_sig = Variable(torch.Tensor(stats['yso4_std']),requires_grad=True).to(device)
+    bc_mu = Variable(torch.Tensor(stats['ybc_mean']),requires_grad=True).to(device)
+    bc_sig = Variable(torch.Tensor(stats['ybc_std']),requires_grad=True).to(device)
+    oc_mu = Variable(torch.Tensor(stats['yoc_mean']),requires_grad=True).to(device)
+    oc_sig = Variable(torch.Tensor(stats['yoc_std']),requires_grad=True).to(device)
+    du_mu = Variable(torch.Tensor(stats['ydu_mean']),requires_grad=True).to(device)
+    du_sig = Variable(torch.Tensor(stats['ydu_std']),requires_grad=True).to(device)
     so4 = torch.mean(torch.sum(y[:,:5], dim=1)+5*so4_mu/so4_sig)
     bc = torch.mean(torch.sum(y[:,5:9], dim=1)+4*bc_mu/bc_sig)
     oc = torch.mean(torch.sum(y[:,9:13], dim=1)+4*oc_mu/oc_sig)
     du = torch.mean(torch.sum(y[:,13:17], dim=1)+4*du_mu/du_sig)
     return so4+bc+oc+ du
+
+#############
+
 ##############
 ########losses
 
@@ -364,8 +402,8 @@ def overall_z_mass(y, scale, stats):
         oc = torch.mean(mass_oc(y[:,9:13]))
         du = torch.mean(mass_du(y[:,13:17]))
         mass = so4+bc+oc+ du    
-    elif scale == 'speces_z':
-        mass = species_mass(y)
+    elif scale == 'species_z':
+        mass = species_mass(y, stats)
     return mass
     
 
@@ -521,6 +559,10 @@ def get_val_scores(model, X_test, y_test, epoch, stats, args):
     elif args.scale == 'species_z':
         pred = species_z_transform_y_inv(stats, pred)
         y_test = species_z_transform_y_inv(stats, y_test)
+        X_test = standard_transform_x_inv(stats, X_test)
+    elif args.scale == 'species_n':
+        pred = species_n_transform_y_inv(stats, pred)
+        y_test = species_n_transform_y_inv(stats, y_test)
         X_test = standard_transform_x_inv(stats, X_test)
         
     scores = get_scores(y_test, pred, X_test, stats)

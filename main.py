@@ -8,7 +8,7 @@ Options:
   --model=<model_version>
 """
 import numpy as np
-from utils import standard_transform_x, standard_transform_y, bc_transform_x, minmax_transform_x,minmax_transform_y, get_model, train_model, create_report, calculate_stats, add_nn_arguments, log_full_norm_transform_x, log_tend_norm_transform_y, create_dataloader, create_test_dataloader, species_z_transform_y
+from utils import standard_transform_x, standard_transform_y, bc_transform_x, minmax_transform_x,minmax_transform_y, get_model, train_model, create_report, calculate_stats, add_nn_arguments, log_full_norm_transform_x, log_tend_norm_transform_y, create_dataloader, create_test_dataloader, species_z_transform_y, species_n_transform_y
 import torch.nn as nn 
 import torch
 import torch.optim as optim
@@ -78,6 +78,11 @@ def main(args):
         X_test = standard_transform_x(stats, X_test)
         y_test= species_z_transform_y(stats, y_test)
         y_train = species_z_transform_y(stats, y_train)
+    elif args.scale == 'species_n':
+        X_train = standard_transform_x(stats, X_train)
+        X_test = standard_transform_x(stats, X_test)
+        y_test= species_n_transform_y(stats, y_test)
+        y_train = species_n_transform_y(stats, y_train)
     elif args.scale == 'bc':
         X_train[:,:11] = standard_transform_x(stats, X_train[:,:11])
         X_test[:,:11] = standard_transform_x(stats, X_test[:,:11])
