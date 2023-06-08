@@ -2,61 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-torch.autograd.set_detect_anomaly(True)
+
 
 ######models
-'''class Base(nn.Module):
-    def __init__(self, in_features, out_features, width, depth, contraint):
-        super(Base, self).__init__()        
-        self.fc_in = nn.Linear(in_features=in_features, out_features=width)
-        self.act_1 = nn.ReLU()
-        self.layer_1 = nn.Linear(in_features=width, out_features=width)
-        self.act_2 = nn.ReLU()
-        self.layer_2 = nn.Linear(in_features=width, out_features=width)
-        self.act_3 = nn.ReLU()    
-        self.fc_out = nn.Linear(in_features=width, out_features=out_features)
-        #self.act_4 = nn.ReLU()
-    def forward(self, x):
-        x = self.fc_in(x)
-        x = self.act_1(x)
-        x = self.layer_1(x)
-        x = self.act_2(x)
-        #x = self.layer_2(x)
-        #x = self.act_3(x)
-        x = self.fc_out(x)
-        #x = self.act_4(x)
-        return x'''
-
-class AddMassConstraints(nn.Module): #for z scale
-    def __init__(self,mu_y, si_y):
-        super(AddMassConstraints, self).__init__()
-        self.mu_y = mu_y
-        self.si_y = si_y
-    def forward(self, y, x):
-        #out = y[:,:5]-torch.mean(self.mu_y[:5])
-        #out_2 = out - torch.mean(y[:,:5],dim=1)
-        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.mean(self.mu_y[:5])-torch.mean(y[:,:5],dim=1).unsqueeze(1))
-        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.mean(self.mu_y[5:9])-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
-        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.mean(self.mu_y[9:13])-torch.mean(y[:,9:13],dim=1).unsqueeze(1))
-        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]-torch.mean(self.mu_y[13:17])-torch.mean(y[:,13:17],dim=1).unsqueeze(1))
-        return y
-    
-class MultMassConstraints(nn.Module): #for n scale
-    def __init__(self,mu_y, si_y):
-        super(MultMassConstraints, self).__init__()
-        self.mu_y = mu_y
-        self.si_y = si_y
-    def forward(self, y, x):
-        out = y[:,:5]-torch.mean(self.mu_y[:5])
-        #out_2 = out - torch.mean(y[:,:5],dim=1)
-        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.mean(self.mu_y[:5])-torch.mean(y[:,:5],dim=1).unsqueeze(1))
-        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.mean(self.mu_y[5:9])-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
-        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.mean(self.mu_y[9:13])-torch.mean(y[:,9:13],dim=1).unsqueeze(1))
-        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]-torch.mean(self.mu_y[13:17])-torch.mean(y[:,13:17],dim=1).unsqueeze(1))
-        return y
 
 class Base(nn.Module):
-    def __init__(self, in_features, out_features, width, depth, constraint, mu_y=None, si_y=None):
+    def __init__(self, in_features, out_features, width, depth=2):
         super(Base, self).__init__()        
         self.fc_in = nn.Linear(in_features=in_features, out_features=width)
         self.hidden_layers = nn.ModuleList()
@@ -65,23 +16,11 @@ class Base(nn.Module):
             self.hidden_layers.append(nn.Linear(in_features=width, out_features=width))
             self.hidden_layers.append(nn.ReLU())
         self.fc_out = nn.Linear(in_features=width, out_features=out_features)
-        self.constraints = False
-        if constraint=='add':
-            self.constraints_layer = AddMassConstraints(mu_y,si_y)
-            self.constraints  = True
-        elif constraint=='compl':
-            self.constraints_layer = CompletionLayer(mu_y,si_y)
-            self.constraints  = True
-        elif constraint=='randcompl':
-            self.constraints_layer = RandCompletionLayer(mu_y,si_y)
-            self.constraints  = True
-    def forward(self, x_in):
-        x = self.fc_in(x_in)
+    def forward(self, x):
+        x = self.fc_in(x)
         for layer in self.hidden_layers:
             x = layer(x)
         x = self.fc_out(x)
-        if self.constraints:
-            x = self.constraints_layer(x,x_in)
         return x
     
 #base network concatenating the signs for log case
@@ -145,40 +84,14 @@ class CompletionLayer(nn.Module):
         self.mu_y = mu_y
         self.si_y = si_y
         
-    def forward(self,x,y):
-        #x_out = torch.clone(x)
+    def forward(self,x):
+        x_out = torch.clone(x)
         x_out[:,4] =(- torch.sum(x[:,:4]*self.si_y[:4]+self.mu_y[:4], dim=1)-self.mu_y[4])/self.si_y[4]
         inds7 = [5,6,8]
         x_out[:,7] = (-torch.sum(x[:,inds7]*self.si_y[inds7]+self.mu_y[inds7], dim=1)-self.mu_y[7])/self.si_y[7]
-        inds11 = [10,11,12]
-        x_out[:,9] = (-torch.sum(x[:,inds11]*self.si_y[inds11]+self.mu_y[inds11], dim=1)-self.mu_y[11])/self.si_y[11]
+        inds11 = [9,10,12]
+        x_out[:,11] = (-torch.sum(x[:,inds11]*self.si_y[inds11]+self.mu_y[inds11], dim=1)-self.mu_y[11])/self.si_y[11]
         x_out[:,13] = (-torch.sum(x[:,14:17]*self.si_y[14:17]+self.mu_y[14:17], dim=1)-self.mu_y[13])/self.si_y[13] 
-        return x_out
-    
-class RandCompletionLayer(nn.Module):
-    def __init__(self, mu_y, si_y):
-        super(RandCompletionLayer, self).__init__()
-        self.mu_y = mu_y
-        self.si_y = si_y
-        
-    def forward(self,x):
-        #x_out = torch.clone(x)
-        rand1 = np.randint(0,5)
-        lis = [0,1,2,3,4]
-        lis.remore(rand1)
-        x_out[:,rand1] =(- torch.sum(x[:,lis]*self.si_y[lis]+self.mu_y[lis], dim=1)-self.mu_y[rand1])/self.si_y[rand1]
-        inds7 = [5,6,7,8]
-        rand2 = np.randint(5,9)
-        inds7.remove(rand2)
-        x_out[:,rand2] = (-torch.sum(x[:,inds7]*self.si_y[inds7]+self.mu_y[inds7], dim=1)-self.mu_y[rand2])/self.si_y[rand2]
-        inds11 = [9,10,11,12]
-        rand3 = np.randint(9,13)
-        inds11.remove(rand3)
-        x_out[:,rand3] = (-torch.sum(x[:,inds11]*self.si_y[inds11]+self.mu_y[inds11], dim=1)-self.mu_y[rand3])/self.si_y[rand3]
-        inds = [13,14,15,16]
-        rand4 = np.randint(13,17)
-        inds.remove(rand4)
-        x_out[:,rand4] = (-torch.sum(x[:,inds]*self.si_y[inds]+self.mu_y[inds], dim=1)-self.mu_y[rand4])/self.si_y[rand4] 
         return x_out
 
     
