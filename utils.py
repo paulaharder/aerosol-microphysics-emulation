@@ -17,6 +17,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 import csv
 import os
 
+EPS = 1e-20
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #######arguments
 
@@ -26,24 +27,24 @@ def add_nn_arguments():
     parser.add_argument("--signs", default=False, help="needed for log with mass reg.")
     parser.add_argument("--scale", default='z', help="z or log")
     parser.add_argument("--model", default="standard", help="standard, completion, correction, positivity, standard_log, log_mass, classification")
-    parser.add_argument("--model_id", default="randcompl_rand_z_0")
+    parser.add_argument("--model_id", default="none")
     parser.add_argument("--log", default=False)
     parser.add_argument("--lr", default=0.001, help="learning rate")
     parser.add_argument("--width", default=128, type=int, help="width of hidden layers")
-    parser.add_argument("--depth", default=2, help="number layers")
+    parser.add_argument("--depth", default=2, type=int, help="number layers")
     parser.add_argument("--loss", default='mse')
     parser.add_argument("--optimizer", default='adam')
     parser.add_argument("--weight_decay", default=1e-9)
-    parser.add_argument("--batch_size", default=2**12)
-    parser.add_argument("--epochs", default=100)
+    parser.add_argument("--batch_size", default=2**12, type=int)
+    parser.add_argument("--epochs", type=int,default=100)
     parser.add_argument("--early_stop", default=False)
     parser.add_argument("--save_val_scores", default=False)
     parser.add_argument("--old_data",default=False)
     parser.add_argument("--tend_full",default='tend')
     parser.add_argument("--alpha",default=0.99)
-    parser.add_argument("--single",default='randcompl')
+    parser.add_argument("--single",default='all')
     parser.add_argument("--constraint",default='none')
-    parser.add_argument("--dataset",default='dataset13')
+    parser.add_argument("--dataset",default='dataset16')
     return parser.parse_args()
 
 def get_single_scores(true, pred, X_test, stats, args):
@@ -71,7 +72,8 @@ def get_single_scores(true, pred, X_test, stats, args):
     r2_diff = r2_score(true_diff, pred_diff, multioutput='raw_values')
     full_pred = np.zeros_like(pred)
     if args.tend_full == 'tend':
-        full_pred[:,:24] = pred[:,:24]+X_test[:,inds]
+        full_pred[:,0] = pred[:,0]+X_test[:,11]
+        full_pred[:,1:24] = pred[:,1:24]+X_test[:,inds[1:]]
         full_pred[:,24:] = pred[:,24:]
         neg_frac = np.mean(full_pred<0,axis=0)
         #negative_mean = neg_mean(full_pred, stats)
@@ -398,6 +400,7 @@ def species_mass(y, stats):
 def overall_z_mass(y, scale, stats):  
     if scale == 'z':
         so4 = torch.mean(mass_so4(y[:,:5]))
+    
         bc = torch.mean(mass_bc(y[:,5:9]))
         oc = torch.mean(mass_oc(y[:,9:13]))
         du = torch.mean(mass_du(y[:,13:17]))
@@ -547,6 +550,7 @@ def get_val_scores(model, X_test, y_test, epoch, stats, args):
     pred = model(torch.Tensor(X_test).to(device))
     #pred = torch.sigmoid(pred)
     pred = pred.cpu().detach().numpy()
+    inds = [10]+[i for i in range(12,35)]
     #scale back
     if args.scale == 'z':
         pred = standard_transform_y_inv(stats, pred)
@@ -564,6 +568,20 @@ def get_val_scores(model, X_test, y_test, epoch, stats, args):
         pred = species_n_transform_y_inv(stats, pred)
         y_test = species_n_transform_y_inv(stats, y_test)
         X_test = standard_transform_x_inv(stats, X_test)
+    if args.scale == 'pre_log':
+        pred = standard_transform_y_inv(stats, pred)
+        y_test = standard_transform_y_inv(stats, y_test)
+        X_test = standard_transform_x_inv(stats, X_test)
+            
+    #tend_z = z(log(x1)-log(x0))
+    #exp(z-1(tend_z)+log(x0))= x1
+    #tend = x0 - exp(z-1(tend_z)+log(x0)) = 
+    if args.scale == 'pre_log':
+        X_log = X_test.copy()
+        X_test[:,inds] = np.exp(X_test[:,inds])-EPS
+        pred[:,:24] = X_unlog - (np.exp(pred[:,:24]+X_log[:,inds])-EPS)
+        y_test[:,:24] = X_unlog - (np.exp(y_test[:,:24]+X_log[:,inds])-EPS)
+        
         
     scores = get_scores(y_test, pred, X_test, stats)
     
@@ -596,6 +614,12 @@ def create_report(model, X_test, y_test, stats, args):
         
         if args.scale == 'z':
             pred = standard_transform_y_inv(stats, pred)
+        elif args.scale == 'pre_log':
+            pred = standard_transform_y_inv(stats, pred)
+            X_log = X_test.copy()
+            X_test[:,inds] = np.exp(X_test[:,inds])-EPS
+            pred[:,:24] = X_unlog - (np.exp(pred[:,:24]+X_log[:,inds])-EPS)
+            y_test[:,:24] = X_unlog - (np.exp(y_test[:,:24]+X_log[:,inds])-EPS)
         elif args.scale == 'minmax':
             pred = minmax_transform_y_inv(stats, pred)
         elif args.scale == 'bc':
@@ -638,7 +662,7 @@ def create_report(model, X_test, y_test, stats, args):
  
                                     
 def save_dict(dictionary, args):
-    w = csv.writer(open('./data/'+str(args.mode)+'_'+args.model_id+'.csv', 'w'))
+    w = csv.writer(open('./scores/'+str(args.mode)+'_'+args.model_id+'.csv', 'w'))
     # loop over dictionary keys and values
     for key, val in dictionary.items():
         # write every key and value to file
