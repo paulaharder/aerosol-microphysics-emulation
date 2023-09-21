@@ -33,8 +33,7 @@ class AddMassConstraints(nn.Module): #for z scale
         self.mu_y = mu_y
         self.si_y = si_y
     def forward(self, y, x):
-        #out = y[:,:5]-torch.mean(self.mu_y[:5])
-        #out_2 = out - torch.mean(y[:,:5],dim=1)
+        #y += -np.mean(y[...,:5],axis=-1)
         y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.mean(self.mu_y[:5])-torch.mean(y[:,:5],dim=1).unsqueeze(1))
         y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.mean(self.mu_y[5:9])-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
         y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.mean(self.mu_y[9:13])-torch.mean(y[:,9:13],dim=1).unsqueeze(1))

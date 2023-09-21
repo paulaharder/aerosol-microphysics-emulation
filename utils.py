@@ -44,7 +44,7 @@ def add_nn_arguments():
     parser.add_argument("--alpha",default=0.99)
     parser.add_argument("--single",default='all')
     parser.add_argument("--constraint",default='none')
-    parser.add_argument("--dataset",default='dataset16')
+    parser.add_argument("--dataset",default='dataset14')
     return parser.parse_args()
 
 def get_single_scores(true, pred, X_test, stats, args):
@@ -72,8 +72,8 @@ def get_single_scores(true, pred, X_test, stats, args):
     r2_diff = r2_score(true_diff, pred_diff, multioutput='raw_values')
     full_pred = np.zeros_like(pred)
     if args.tend_full == 'tend':
-        full_pred[:,0] = pred[:,0]+X_test[:,11]
-        full_pred[:,1:24] = pred[:,1:24]+X_test[:,inds[1:]]
+        #full_pred[:,0] = pred[:,0]+X_test[:,11]
+        full_pred[:,:24] = pred[:,:24]+X_test[:,inds]
         full_pred[:,24:] = pred[:,24:]
         neg_frac = np.mean(full_pred<0,axis=0)
         #negative_mean = neg_mean(full_pred, stats)
@@ -197,7 +197,10 @@ def calculate_stats(X_train, y_train, X_test, y_test, args):
     global si_y
     global mu_x
     global si_x
-
+    inds = [10]+[i for i in range(12,35)]
+    if args.scale == 'pre_z':
+        stats['ytrain_mean'][:24]=stats['xtrain_mean'][inds]
+        stats['ytrain_std'][:24]=stats['xtrain_std'][inds]
     
     mu_y = Variable(torch.Tensor(stats['ytrain_mean']),requires_grad=True).to(device)
     si_y = Variable(torch.Tensor(stats['ytrain_std']),requires_grad=True).to(device)
@@ -605,6 +608,7 @@ def create_report(model, X_test, y_test, stats, args):
     #pred = torch.sigmoid(pred)
     pred = pred.cpu().detach().numpy()
     #scale back
+    inds = [10]+[i for i in range(12,35)]
     if args.model == 'classification':
         classes = get_classes(pred)
         np.save('./data/classes.npy',classes)
@@ -614,12 +618,32 @@ def create_report(model, X_test, y_test, stats, args):
         
         if args.scale == 'z':
             pred = standard_transform_y_inv(stats, pred)
+        elif args.scale == 'pre_z':
+            X_scale = X_test.copy()
+            X_test = standard_transform_x_inv(stats, X_test)
+            pred[:,:24] =  standard_transform_x_inv(stats, pred[:,:24]+X_scale[:,inds])- X_test[:,ind]
+            y_test[:,24:] = standard_transform_y_inv(stats, y_test)[:,24:]
+            y_test[:,:24] =  standard_transform_x_inv(stats,y_test[:,:24]+X_scale[:,inds])- X_test[:,ind]
+            pred[:,24:] = standard_transform_y_inv(stats, pred)[:,24:]
+            #tend = y-x
+            #tend_z = z(y)-z(x)
+            #z-1(tendz+z(x)) = y
         elif args.scale == 'pre_log':
             pred = standard_transform_y_inv(stats, pred)
+            y_test = standard_transform_y_inv(stats, y_test)
+            X_test = standard_transform_x_inv(stats, X_test)
             X_log = X_test.copy()
             X_test[:,inds] = np.exp(X_test[:,inds])-EPS
-            pred[:,:24] = X_unlog - (np.exp(pred[:,:24]+X_log[:,inds])-EPS)
-            y_test[:,:24] = X_unlog - (np.exp(y_test[:,:24]+X_log[:,inds])-EPS)
+            pred[:,24:] = np.exp(pred[:,24:])-EPS
+            y_test[:,24:] = np.exp(y_test[:,24:])-EPS
+            print(pred[:,:24].max(),pred[:,:24].min(),y_test[:,:24].max(),y_test[:,:24].min())
+            y_test[:,:24] = (np.exp(y_test[:,:24]+X_log[:,inds])-EPS)-X_test[:,inds] 
+            pred[:,:24] = (np.exp(pred[:,:24]+X_log[:,inds])-EPS)- X_test[:,inds]
+            #tend_z = z(log(y)-log(x))
+            #exp(z-1(tend_z)+log(x))= y
+            #tend = exp(z-1(tend_z)+log(x0)) - x
+            #tend = y - x 
+            
         elif args.scale == 'minmax':
             pred = minmax_transform_y_inv(stats, pred)
         elif args.scale == 'bc':

@@ -32,30 +32,32 @@ def main(args):
     inds = [10]+[i for i in range(12,35)]
     
     eps = 1e-20
+    
+    #add dh2s04
+    X_train[:,10] += 600*X_train[:,11]
+    X_test[:,10] += 600*X_test[:,11]
+    X_train[X_train[:,10]<0,10]=0
+    X_test[X_test[:,10]<0,10]=0
+    
+    stats = calculate_stats(X_train, y_train, X_test, y_test, args)
     #pre change transform
     if args.scale == 'pre_log':
         #do not log everything, only masses and numbers
         X_train[:,inds] = np.log(X_train[:,inds]+eps)
         X_test[:,inds] = np.log(X_test[:,inds]+eps)
+        y_train = np.log(y_train+eps)
+        y_test = np.log(y_test+eps)
+    elif args.scale == 'pre_z':
+        X_train = standard_transform_x(stats, X_train)
+        X_test = standard_transform_x(stats, X_test)
+        if not args.model == 'classification':
+            y_test= standard_transform_y(stats, y_test)
+            y_train = standard_transform_y(stats, y_train)
         
-    
-    #calculate tendencies
-    #special case for sulphate
     if args.tend_full == 'tend':
-        y_train[:,0] -= X_train[:,10]+600*X_train[:,11]
-        y_test[:,0] -= X_test[:,10]+600*X_test[:,11]
-        y_train[:,1:24] -= X_train[:,12:35]
-        y_test[:,1:24] -= X_test[:,12:35]
-        #does above makes sense?
-        #defi need to change back scaling as well
-        #had somegthing I thoughtthis would break?
-        #doesnt work together with pre_log
-        
-        #y_train[:,:24] -= X_train[:,inds]
-        #y_test[:,:24] -= X_test[:,inds]
-        
-        
-        
+        y_train[:,:24] -= X_train[:,inds]
+        y_test[:,:24] -= X_test[:,inds]
+
         
     if args.single == 'bc':
         y_train = y_train[:,5:9]
@@ -65,7 +67,7 @@ def main(args):
     
     #y_train = y_train[:,:24]
     #y_test = y_test[:,:24]
-    stats = calculate_stats(X_train, y_train, X_test, y_test, args)
+    
     
     
     
