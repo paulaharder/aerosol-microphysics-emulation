@@ -294,7 +294,7 @@ def create_test_dataloader(x,y, args):
 
 def get_model(in_features, out_features,args, constraints_active):
     if args.model == 'standard' or args.model == 'standard_log':
-        model = Base(in_features, out_features, args.width, args.depth, args.constraint, mu_y, si_y)
+        model = Base(in_features, out_features, args.width, args.depth, args.constraint, mu_y, si_y, mu_x, si_x)
     elif args.model == 'log_mass':
         model = SignExtBase(in_features, out_features, width=args.width)
     elif args.model == 'positivity':
@@ -471,6 +471,20 @@ def train_model(model, train_data, test_data, optimizer, input_dim, output_dim, 
             break
     if args.save_val_scores:
         save_validation_scores(val_r2, val_mse, val_mass, val_neg, args)
+        
+def neg_fraction(x,y):
+    inds = [10]+[i for i in range(12,35)]
+    y_orig = y[:,:28]*si_y[:28]+mu_y[:28] #output in original scal
+    x_orig = x[:,inds]*si_x[inds]+mu_x[inds] #input in orginal scale
+    pos = y_orig[:,:24]+x_orig
+    return np.mean(pos.detach().cpu().numpy()<0,axis=0)
+
+def neg_fraction_numpy(x,y,stats):
+    inds = [10]+[i for i in range(12,35)]
+    y_orig = y[:,:28]*stats['ytrain_std'][:28]+stats['ytrain_mean'][:28] #output in original scal
+    x_orig = x[:,inds]*stats['xtrain_std'][inds]+stats['xtrain_mean'][inds] #input in orginal scale
+    pos = y_orig[:,:24]+x_orig
+    return np.mean(pos<0,axis=0)
                            
 def model_step(model, train_data, optimizer, epoch, args, stats):
     running_loss = 0
@@ -481,6 +495,7 @@ def model_step(model, train_data, optimizer, epoch, args, stats):
         optimizer.zero_grad()
         model.to(device)
         output = model(x)
+        
         #output = torch.sigmoid(output).clone()
         '''
         if epoch > 30:
@@ -490,6 +505,7 @@ def model_step(model, train_data, optimizer, epoch, args, stats):
         elif epoch > 10:
             output = F.leaky_relu(output)'''
         y = y.to(device)
+        #print('neg', neg_fraction(x,output))
         if args.loss == 'mse_mass':
             mse_loss, mass_loss = get_loss(output, y, args, x, stats)
             loss = mse_loss + mass_loss
@@ -515,6 +531,7 @@ def get_val_loss(model, test_data, epoch, args, stats):
         for x, y in test_data:
             x = x.to(device)
             output = model(x)
+            #print('neg', neg_fraction(x,output))
             #output = torch.sigmoid(output).clone()
             y = y.to(device)
             if args.loss== 'mse_mass':
@@ -619,12 +636,14 @@ def create_report(model, X_test, y_test, stats, args):
         if args.scale == 'z':
             pred = standard_transform_y_inv(stats, pred)
         elif args.scale == 'pre_z':
+            print('neg', neg_fraction_numpy(X_test,pred,stats))
             X_scale = X_test.copy()
             X_test = standard_transform_x_inv(stats, X_test)
-            pred[:,:24] =  standard_transform_x_inv(stats, pred[:,:24]+X_scale[:,inds])- X_test[:,ind]
+            pred[:,:24] =  pred[:,:24]*stats['xtrain_std'][inds]+stats['xtrain_mean'][inds]
             y_test[:,24:] = standard_transform_y_inv(stats, y_test)[:,24:]
-            y_test[:,:24] =  standard_transform_x_inv(stats,y_test[:,:24]+X_scale[:,inds])- X_test[:,ind]
+            y_test[:,:24] =  y_test[:,:24]*stats['xtrain_std'][inds]+stats['xtrain_mean'][inds]
             pred[:,24:] = standard_transform_y_inv(stats, pred)[:,24:]
+            print('neg after scale',np.mean((pred[:,:24]+X_test[:,inds])<0,axis=0))
             #tend = y-x
             #tend_z = z(y)-z(x)
             #z-1(tendz+z(x)) = y

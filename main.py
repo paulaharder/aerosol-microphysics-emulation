@@ -39,7 +39,11 @@ def main(args):
     X_train[X_train[:,10]<0,10]=0
     X_test[X_test[:,10]<0,10]=0
     
-    stats = calculate_stats(X_train, y_train, X_test, y_test, args)
+    stats = calculate_stats(X_train, y_train, X_test, y_test, args)#
+    print(np.mean(y_train<0,axis=0))
+    print(np.mean(y_test<0,axis=0))
+    print(np.mean(X_train[:,inds]<0,axis=0))
+    print(np.mean(X_test[:,inds]<0,axis=0))
     #pre change transform
     if args.scale == 'pre_log':
         #do not log everything, only masses and numbers
@@ -139,7 +143,7 @@ def main(args):
     input_dim = X_train.shape[1]
     output_dim = y_train.shape[1]
     
-    model = get_model(in_features=input_dim, out_features=output_dim, args=args, constraints_active=False)  
+    model = get_model(in_features=input_dim, out_features=output_dim, args=args, constraints_active=True)  
     if args.mode == 'train':
         optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         train_model(model=model, train_data=train_data, test_data=test_data, optimizer=optimizer, input_dim=input_dim, output_dim=output_dim, stats=stats, X_test=X_test, y_test=y_test, args=args)

@@ -55,7 +55,7 @@ class MultMassConstraints(nn.Module): #for n scale
         return y
 
 class Base(nn.Module):
-    def __init__(self, in_features, out_features, width, depth, constraint, mu_y=None, si_y=None):
+    def __init__(self, in_features, out_features, width, depth, constraint, mu_y=None, si_y=None, mu_x=None, si_x=None):
         super(Base, self).__init__()        
         self.fc_in = nn.Linear(in_features=in_features, out_features=width)
         self.hidden_layers = nn.ModuleList()
@@ -73,6 +73,12 @@ class Base(nn.Module):
             self.constraints  = True
         elif constraint=='randcompl':
             self.constraints_layer = RandCompletionLayer(mu_y,si_y)
+            self.constraints  = True
+        elif constraint=='corr_pre':
+            self.constraints_layer = CorrectionLayerNew(mu_y,si_y)
+            self.constraints  = True
+        elif constraint=='corr':
+            self.constraints_layer = CorrectionLayer(mu_y,si_y,mu_x,si_x)
             self.constraints  = True
     def forward(self, x_in):
         x = self.fc_in(x_in)
@@ -180,7 +186,13 @@ class RandCompletionLayer(nn.Module):
         x_out[:,rand4] = (-torch.sum(x[:,inds]*self.si_y[inds]+self.mu_y[inds], dim=1)-self.mu_y[rand4])/self.si_y[rand4] 
         return x_out
 
-    
+def neg_fraction(x,y, mu_y, si_y, mu_x, si_x):
+    inds = [10]+[i for i in range(12,35)]
+    y_orig = y[:,:28]*si_y[:28]+mu_y[:28] #output in original scal
+    x_orig = x[:,inds]*si_x[inds]+mu_x[inds] #input in orginal scale
+    pos = y_orig[:,:24]+x_orig
+    return np.mean(pos.detach().cpu().numpy()<0,axis=0)
+
 class CorrectionLayer(nn.Module):
     def __init__(self, mu_y, si_y, mu_x, si_x):
         super(CorrectionLayer, self).__init__()
@@ -188,19 +200,41 @@ class CorrectionLayer(nn.Module):
         self.si_y = si_y
         self.mu_x = mu_x
         self.si_x = si_x
+        self.relu1 = nn.ReLU(inplace=False)
+        self.relu2 = nn.ReLU(inplace=False)
+        
+    def forward(self,y,x):
+        inds = [10]+[i for i in range(12,35)]
+        y_orig = y[:,:28]*self.si_y[:28]+self.mu_y[:28] #output in original scal
+        x_orig = x[:,inds]*self.si_x[inds]+self.mu_x[inds] #input in orginal scale
+        pos = self.relu1(y_orig[:,:24]+x_orig)
+        y1 = pos - x_orig 
+        #print(np.mean((y1+x_orig).detach().cpu().numpy()<0,axis=0))
+        #test past
+        y_out = y.clone()
+        y_out[:,:24] = (y1-self.mu_y[:24])/self.si_y[:24]      
+        #y_out[:,24:28] = self.relu2(y_orig[:,24:28])
+        y_out[:,24:28] = (self.relu2(y_orig[:,24:28])-self.mu_y[24:28])/self.si_y[24:28]
+        print(np.mean((y_out[:,:24]*self.si_y[:24]+x[:,inds]*self.si_x[inds]+self.mu_x[inds]).detach().cpu().numpy()<0,axis=0))
+        #print(neg_fraction(x,y_out, self.mu_y, self.si_y, self.mu_x, self.si_x))
+        #test failed
+        return y_out[:,:28]
+    
+
+class CorrectionLayerNew(nn.Module):
+    def __init__(self, mu_x, si_x):
+        super(CorrectionLayerNew, self).__init__()
+        self.mu_x = mu_x
+        self.si_x = si_x
         self.relu1 = nn.ReLU()
         self.relu2 = nn.ReLU()
         
-    def forward(self,x):
-        y_orig = x[:,:28]*self.si_y[:28]+self.mu_y[:28] #output in original scal
-        x_orig = x[:,28:]*self.si_x[8:]+self.mu_x[8:] #input in orginal scale
-        pos = self.relu1(y_orig[:,:24]+x_orig)
-        x[:,:24] = pos - x_orig 
-        x[:,:24] = (x[:,:24]-self.mu_y[:24])/self.si_y[:24]      
-        x[:,24:28] = self.relu2(y_orig[:,24:28])
-        x[:,24:28] = (self.relu2(y_orig[:,24:28])-self.mu_y[24:28])/self.si_y[24:28]
-        return x[:,:28]
-    
+    def forward(self,y,x):
+        inds = [10]+[i for i in range(12,35)]
+        pos = self.relu1(y[:,:24]+x[:,inds]+self.mu_x[:24]/self.si_x[:24])
+        y[:,:24] = pos - x[:,inds] - self.mu_x[:24]/self.si_x[:24]     
+        y[:,24:28] = self.relu2(y[:,24:28]+self.mu_x[24:28]/self.si_x[24:28])
+        return y[:,:28]    
     
 class CompletionNN(nn.Module):
     def __init__(self, in_features, out_features, width, mu_y, si_y, activate_completion):
