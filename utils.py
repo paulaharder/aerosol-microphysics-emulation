@@ -16,6 +16,7 @@ import pickle
 from sklearn.metrics import mean_squared_error, r2_score
 import csv
 import os
+torch.set_default_dtype(torch.float64)
 
 EPS = 1e-20
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -41,10 +42,11 @@ def add_nn_arguments():
     parser.add_argument("--save_val_scores", default=False)
     parser.add_argument("--old_data",default=False)
     parser.add_argument("--tend_full",default='tend')
-    parser.add_argument("--alpha",default=0.99)
+    parser.add_argument("--alpha",default=0.5)
     parser.add_argument("--single",default='all')
     parser.add_argument("--constraint",default='none')
     parser.add_argument("--dataset",default='dataset14')
+    parser.add_argument("--dh2s04",default='add')
     return parser.parse_args()
 
 def get_single_scores(true, pred, X_test, stats, args):
@@ -71,13 +73,14 @@ def get_single_scores(true, pred, X_test, stats, args):
     pred_diff[:,:24] += X_test[:,inds]#np.concatenate((X_val[:,16:18],X_val[:,19:24]),axis=1)
     r2_diff = r2_score(true_diff, pred_diff, multioutput='raw_values')
     full_pred = np.zeros_like(pred)
-    if args.tend_full == 'tend':
-        #full_pred[:,0] = pred[:,0]+X_test[:,11]
-        full_pred[:,:24] = pred[:,:24]+X_test[:,inds]
-        full_pred[:,24:] = pred[:,24:]
-        neg_frac = np.mean(full_pred<0,axis=0)
+    
+    #full_pred[:,0] = pred[:,0]+X_test[:,11]
+    full_pred[:,:24] = pred[:,:24]+X_test[:,inds]
+    full_pred[:,24:] = pred[:,24:]
+    neg_frac = np.mean(full_pred<0,axis=0)
+    
         #negative_mean = neg_mean(full_pred, stats)
-    return  {'R2_single': r2, 'R2 log single': r2_log, 'RMSE single': rmse, 'mae single': mae, 'r2_full single':r2_diff, 'mean bias single': mean_bias, 'Negative fraction single': neg_frac}
+    return  {'R2_single': r2,'r2_mean':np.mean(r2), 'R2 log single': r2_log, 'RMSE single': rmse, 'mae single': mae, 'r2_full single':r2_diff, 'mean bias single': mean_bias, 'Negative fraction single': neg_frac}
 
 def get_scores(true, pred, X_test, stats, args):
     r2=  r2_score(true, pred)
@@ -89,11 +92,11 @@ def get_scores(true, pred, X_test, stats, args):
     full_pred = np.zeros_like(pred)
     inds = [10]+[i for i in range(12,35)]
     mean_bias = np.mean((true-pred)/stats['ytrain_std'])
-    if args.tend_full == 'tend':
-        full_pred[:,:24] = pred[:,:24]+X_test[:,inds]
-        full_pred[:,24:] = pred[:,24:]
-        neg_frac = np.mean(full_pred<0)
-        negative_mean = neg_mean(full_pred, stats)
+    
+    full_pred[:,:24] = pred[:,:24]+X_test[:,inds]
+    full_pred[:,24:] = pred[:,24:]
+    neg_frac = np.mean(full_pred<0)
+    negative_mean = neg_mean(full_pred, stats)
     return {'R2': r2, 'R2 log': r2_log, 'RMSE': rmse, 'mae': mae, 'mean bias': mean_bias, 'Mass Bias':mass_biases, 'Masses RMSE':masses_rmse,'mass rmse':np.mean(masses_rmse),'Negative fraction': neg_frac,'Negative mean' : negative_mean}
 
 ########
@@ -312,7 +315,7 @@ def get_loss(output, y, args, x, stats):
     crit2 = nn.MSELoss()
     class_criterion = nn.BCELoss()
     if args.loss == 'mse':
-        return criterion(output, y)
+        return criterion(output[:,:28], y[:,:28]), overall_z_mass(output, args.scale, stats)
     elif args.loss == 'tend_loss':
         inds = [10]+[i for i in range(12,35)]
         tend_output= output
@@ -321,7 +324,7 @@ def get_loss(output, y, args, x, stats):
         tend_y[:,:24]= y[:,:24]-x[:,inds]#(y[:,:24]*torch.Tensor(stats['ytrain_std'][:24]).to(device)+torch.Tensor(stats['ytrain_mean'][:24]).to(device))-(x[:,inds]*torch.Tensor(stats['ytrain_std'][:24]).to(device)+torch.Tensor(stats['ytrain_mean'][:24]).to(device))
         #tend_output = (tend_output-torch.Tensor(stats['tend_mean']).to(device))/torch.Tensor(stats['tend_std']).to(device)
         #tend_y = (tend_y-torch.Tensor(stats['tend_mean']).to(device))/torch.Tensor(stats['tend_std']).to(device)
-        return (1-args.alpha)*criterion(output[:,:28], y[:,:28])+10e5*args.alpha*crit2(tend_output[:,:28], tend_y[:,:28])
+        return criterion(output[:,:28], y[:,:28])+10e5*crit2(tend_output[:,:28], tend_y[:,:28]), overall_z_mass(output, args.scale, stats)
     elif args.loss == 'tend_loss_bc':
         inds = [10]+[i for i in range(12,35)]
         tend_output= output-x[:,11:]#(output[:,:24]*torch.Tensor(stats['ytrain_std'][:24]).to(device)+torch.Tensor(stats['ytrain_mean'][:24]).to(device))-(x[:,inds]*torch.Tensor(stats['ytrain_std'][:24]).to(device)+torch.Tensor(stats['ytrain_mean'][:24]).to(device))
@@ -330,7 +333,7 @@ def get_loss(output, y, args, x, stats):
         #tend_y = (tend_y-torch.Tensor(stats['tend_mean']).to(device))/torch.Tensor(stats['tend_std']).to(device)
         return (1-args.alpha)*criterion(output[:,:28], y[:,:28])+args.alpha*crit2(tend_output, tend_y)
     elif args.loss == 'mse_mass':
-        return args.alpha*criterion(output[:,:28], y[:,:28]), (1-args.alpha)*overall_z_mass(output, args.scale, stats)
+        return criterion(output[:,:28], y[:,:28]), overall_z_mass(output, args.scale, stats)
     elif args.loss == 'mse_relu':
         return criterion(output[:,:28], y[:,:28])+relu_all(output)
     elif args.loss == 'mse_log_mass':
@@ -360,19 +363,19 @@ def mass_so4(y):
     y = y*si_y[:5]+mu_y[:5]
     summ = torch.sum(y, dim=1)
     so4_mass = torch.abs(summ)
-    return 1e-7*so4_mass
+    return 1e-9*so4_mass
 
 def mass_bc(y):
     y = y*si_y[5:9]+mu_y[5:9]
     summ = torch.sum(y, dim=1)
     so4_mass = torch.abs(summ)
-    return 2*1e+4*so4_mass
+    return 1e+2*so4_mass
 
 def mass_oc(y):
     y = y*si_y[9:13]+mu_y[9:13]
     summ = torch.sum(y, dim=1)
     so4_mass = torch.abs(summ)
-    return 2*1e+3*so4_mass
+    return 1e+1*so4_mass
 
 def mass_du(y):
     y = y*si_y[13:17]+mu_y[13:17]
@@ -401,7 +404,7 @@ def species_mass(y, stats):
 ########losses
 
 def overall_z_mass(y, scale, stats):  
-    if scale == 'z':
+    if scale == 'z' or scale == 'pre_z':
         so4 = torch.mean(mass_so4(y[:,:5]))
     
         bc = torch.mean(mass_bc(y[:,5:9]))
@@ -481,7 +484,7 @@ def neg_fraction(x,y):
 
 def neg_fraction_numpy(x,y,stats):
     inds = [10]+[i for i in range(12,35)]
-    y_orig = y[:,:28]*stats['ytrain_std'][:28]+stats['ytrain_mean'][:28] #output in original scal
+    y_orig = y[:,:28]*stats['ytrain_std'][:28]#+stats['ytrain_mean'][:28] #output in original scal
     x_orig = x[:,inds]*stats['xtrain_std'][inds]+stats['xtrain_mean'][inds] #input in orginal scale
     pos = y_orig[:,:24]+x_orig
     return np.mean(pos<0,axis=0)
@@ -490,12 +493,13 @@ def model_step(model, train_data, optimizer, epoch, args, stats):
     running_loss = 0
     running_mass_loss = 0
     inds = [10]+[i for i in range(12,35)]
+    
     for x, y in train_data:
         x = x.to(device)
         optimizer.zero_grad()
         model.to(device)
         output = model(x)
-        
+        #print(mass_so4(output).mean(),mass_oc(output).mean(),mass_bc(output).mean(),mass_du(output).mean())
         #output = torch.sigmoid(output).clone()
         '''
         if epoch > 30:
@@ -506,16 +510,29 @@ def model_step(model, train_data, optimizer, epoch, args, stats):
             output = F.leaky_relu(output)'''
         y = y.to(device)
         #print('neg', neg_fraction(x,output))
+        
+        mse_loss, mass_loss = get_loss(output, y, args, x, stats)
         if args.loss == 'mse_mass':
-            mse_loss, mass_loss = get_loss(output, y, args, x, stats)
-            loss = mse_loss + mass_loss
-            running_mass_loss +=mass_loss
+            loss = mse_loss + args.alpha*mass_loss
+        elif args.loss == 'mass_scheduled':
+            if epoch > 10:
+
+                loss = mse_loss + 0.1*(epoch-10)*mass_loss
+            elif epoch > 20:
+
+                loss = mse_loss + (epoch-20)*mass_loss
+            else:
+                loss = mse_loss
+            #running_mass_loss +=mass_loss
+
+            #loss = mse_loss + mass_loss
         else:
-            loss = get_loss(output, y, args, x, stats)
+            loss = mse_loss
             
         loss.backward()
         optimizer.step()
-        running_loss += loss.item()
+        running_loss += mse_loss.item()
+        running_mass_loss +=mass_loss
         
         #tend_out = output[:,:24]-x[:,inds]
         #tend_y = y[:,:24]-x[:,inds]
@@ -526,6 +543,7 @@ def model_step(model, train_data, optimizer, epoch, args, stats):
 
 def get_val_loss(model, test_data, epoch, args, stats):
     running_val_loss = 0
+    running_mass_val_loss = 0
     model.eval()
     with torch.no_grad():
         for x, y in test_data:
@@ -534,12 +552,16 @@ def get_val_loss(model, test_data, epoch, args, stats):
             #print('neg', neg_fraction(x,output))
             #output = torch.sigmoid(output).clone()
             y = y.to(device)
+            mse_loss, mass_loss = get_loss(output, y, args, x, stats)
             if args.loss== 'mse_mass':
-                loss,mass = get_loss(output, y, args,x, stats)
+                loss= mse_loss+mass_loss
+                
             else:
-                loss= get_loss(output, y, args,x, stats)
-            running_val_loss += loss.item()
+                loss= mse_loss
+            running_val_loss += mse_loss.item()
+            running_mass_val_loss += mass_loss
     loss = running_val_loss/len(test_data)
+    print('mass loss',running_mass_val_loss/len(test_data))
     print('Epoch {}, Val Loss: {:.5f}'.format(epoch+1, loss))
     model.train()
     return loss
@@ -561,7 +583,7 @@ def check_for_early_stopping(val_loss, best, patience):
         is_stop = True  
     return is_stop, patience
 
-def get_val_scores(model, X_test, y_test, epoch, stats, args):
+'''def get_val_scores(model, X_test, y_test, epoch, stats, args):
     mse = 0
     r2 = 0
     mass = 0
@@ -606,7 +628,7 @@ def get_val_scores(model, X_test, y_test, epoch, stats, args):
     scores = get_scores(y_test, pred, X_test, stats)
     
 
-    return scores["R2"], scores["RMSE"], scores["Mass RMSE"], scores["Negative fraction"]
+    return scores["R2"], scores["RMSE"], scores["Mass RMSE"], scores["Negative fraction"]'''
 
 def save_validation_scores(r2, mse, mass, neg, args):
     if not os.path.exists('./data/epoch_scores'):
@@ -622,7 +644,8 @@ def save_validation_scores(r2, mse, mass, neg, args):
 def create_report(model, X_test, y_test, stats, args):
     #predict
     pred = model(torch.Tensor(X_test).to(device))
-    #pred = torch.sigmoid(pred)
+    #pred = torch.sigmoid(pred)#
+    print(pred.dtype)
     pred = pred.cpu().detach().numpy()
     #scale back
     inds = [10]+[i for i in range(12,35)]
@@ -634,14 +657,37 @@ def create_report(model, X_test, y_test, stats, args):
     else:
         
         if args.scale == 'z':
-            pred = standard_transform_y_inv(stats, pred)
+            #pred = standard_transform_y_inv(stats, pred)
+            x_orig = X_test*stats['xtrain_std']+stats['xtrain_mean']
+            #pred_sig = 
+            a1 = (pred[:,:24]+(x_orig[:,inds]/stats['ytrain_std'][:24]+stats['ytrain_mean'][:24]/stats['ytrain_std'][:24]))
+            #X_test = standard_transform_x_inv(stats, X_test)
+            #print('neg scale 3',np.mean((pred[:,:24]*stats['ytrain_std'][:24]+X_test[:,inds])<0,axis=0))
+            X_test[:,inds] = x_orig[:,inds]
+            pred[:,:24] =  a1*stats['ytrain_std'][:24]-X_test[:,inds]
+            pred[:,24:] = standard_transform_y_inv(stats, pred)[:,24:]
+
         elif args.scale == 'pre_z':
-            print('neg', neg_fraction_numpy(X_test,pred,stats))
-            X_scale = X_test.copy()
-            X_test = standard_transform_x_inv(stats, X_test)
-            pred[:,:24] =  pred[:,:24]*stats['xtrain_std'][inds]+stats['xtrain_mean'][inds]
+            '''print('neg', neg_fraction_numpy(X_test,pred,stats))
+            a1 = (pred[:,:24]+(X_test[:,inds]+stats['ytrain_mean'][:24]/stats['ytrain_std'][:24]))
+            print('neg scale 1',np.mean(a1<0,axis=0))
+            #print(a[-500:,1]*stats['ytrain_std'][1])
+            print(pred[:,:24].dtype,stats['ytrain_mean'].dtype)
+            a = (pred[:,:24]*stats['ytrain_std'][:24]+X_test[:,inds]*stats['ytrain_std'][:24]+stats['ytrain_mean'][:24])
+            #print(a[-500:,1])
+            print('neg scale 2',np.mean(a1*stats['ytrain_std'][:24]<0,axis=0))
+            print('neg scale 2',np.mean((torch.Tensor(pred[:,:24])*torch.Tensor(stats['ytrain_std'][:24])+torch.Tensor(X_test[:,inds])*torch.Tensor(stats['ytrain_std'][:24])+torch.Tensor(stats['ytrain_mean'][:24])).numpy()<0,axis=0))'''
+            x_sig = X_test+stats['xtrain_mean']/stats['xtrain_std']
+            #pred_sig = 
+            a1 = (pred[:,:24]+(X_test[:,inds]+stats['ytrain_mean'][:24]/stats['ytrain_std'][:24]))
+            #X_test = standard_transform_x_inv(stats, X_test)
+            #print('neg scale 3',np.mean((pred[:,:24]*stats['ytrain_std'][:24]+X_test[:,inds])<0,axis=0))
+            X_test[:,inds] = x_sig[:,inds]*stats['ytrain_std'][:24]
+            pred[:,:24] =  a1*stats['ytrain_std'][:24]-X_test[:,inds]#pred[:,:24]*stats['xtrain_std'][inds]
+            #print('neg scale 4',np.mean((pred[:,:24]+X_test[:,inds])<0,axis=0))
+            #print('neg scale 4',np.mean((pred[:,:24]+X_test[:,inds]*stats['ytrain_std'][:24]+stats['ytrain_mean'][:24])<0,axis=0))
             y_test[:,24:] = standard_transform_y_inv(stats, y_test)[:,24:]
-            y_test[:,:24] =  y_test[:,:24]*stats['xtrain_std'][inds]+stats['xtrain_mean'][inds]
+            y_test[:,:24] =  y_test[:,:24]*stats['xtrain_std'][inds]
             pred[:,24:] = standard_transform_y_inv(stats, pred)[:,24:]
             print('neg after scale',np.mean((pred[:,:24]+X_test[:,inds])<0,axis=0))
             #tend = y-x
@@ -655,7 +701,7 @@ def create_report(model, X_test, y_test, stats, args):
             X_test[:,inds] = np.exp(X_test[:,inds])-EPS
             pred[:,24:] = np.exp(pred[:,24:])-EPS
             y_test[:,24:] = np.exp(y_test[:,24:])-EPS
-            print(pred[:,:24].max(),pred[:,:24].min(),y_test[:,:24].max(),y_test[:,:24].min())
+            #print(pred[:,:24].max(),pred[:,:24].min(),y_test[:,:24].max(),y_test[:,:24].min())
             y_test[:,:24] = (np.exp(y_test[:,:24]+X_log[:,inds])-EPS)-X_test[:,inds] 
             pred[:,:24] = (np.exp(pred[:,:24]+X_log[:,inds])-EPS)- X_test[:,inds]
             #tend_z = z(log(y)-log(x))
@@ -671,7 +717,7 @@ def create_report(model, X_test, y_test, stats, args):
             pred = log_tend_norm_transform_x_inv(stats, pred)
         if args.scale == 'z':
             y_test = standard_transform_y_inv(stats, y_test)
-            X_test = standard_transform_x_inv(stats, X_test)
+            #X_test = standard_transform_x_inv(stats, X_test)
         elif args.scale == 'minmax':
             y_test = minmax_transform_y_inv(stats, y_test)
             X_test = minmax_transform_x_inv(stats, X_test)
@@ -690,6 +736,10 @@ def create_report(model, X_test, y_test, stats, args):
                 
         if args.model == 'correction':
             pred = correction(pred, X_test[:,8:])
+        if args.tend_full == 'full':
+            pred[:,:24] -= X_test[:,inds]
+            y_test[:,:24] -= X_test[:,inds]
+        print(pred[2000,:24]+X_test[2000,inds],pred[2000,:24])
         np.save('./data/prediction.npy',pred)
         scores = get_scores(y_test, pred, X_test, stats, args)
         single_scores = get_single_scores(y_test, pred, X_test, stats, args)
@@ -718,10 +768,10 @@ def norm(x, stats):
     return (x-stats['ytrain_mean'])/stats['ytrain_std']
 
 def masses(y):
-    so4_mass = y[:,0]+y[:,1]+y[:,2]+y[:,3]+y[:,4]
-    bc_mass = y[:,5]+y[:,6]+y[:,7]+y[:,8]
-    oc_mass = y[:,9]+y[:,10]+y[:,11]+y[:,12]
-    du_mass = y[:,13]+y[:,14]+y[:,15]+y[:,16]
+    so4_mass = np.sum(y[:,:5],axis=1)
+    bc_mass = np.sum(y[:,5:9],axis=1)
+    oc_mass = np.sum(y[:,9:13],axis=1)
+    du_mass = np.sum(y[:,13:17],axis=1)
     return np.array([so4_mass, bc_mass, oc_mass, du_mass])
 
 def norm_rmse(true, pred, stats):

@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 torch.autograd.set_detect_anomaly(True)
+torch.set_default_dtype(torch.float64)
+CUDA_LAUNCH_BLOCKING=1
 
 ######models
 '''class Base(nn.Module):
@@ -34,11 +36,75 @@ class AddMassConstraints(nn.Module): #for z scale
         self.si_y = si_y
     def forward(self, y, x):
         #y += -np.mean(y[...,:5],axis=-1)
-        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.mean(self.mu_y[:5])-torch.mean(y[:,:5],dim=1).unsqueeze(1))
-        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.mean(self.mu_y[5:9])-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
-        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.mean(self.mu_y[9:13])-torch.mean(y[:,9:13],dim=1).unsqueeze(1))
-        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]-torch.mean(self.mu_y[13:17])-torch.mean(y[:,13:17],dim=1).unsqueeze(1))
+        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.mean(y[:,:5],dim=1).unsqueeze(1))
+        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
+        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.mean(y[:,9:13],dim=1).unsqueeze(1))
+        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]-torch.mean(y[:,13:17],dim=1).unsqueeze(1))
         return y
+    
+class AddMassConstraintsZ(nn.Module): #for z scale
+    def __init__(self,mu_y, si_y):
+        super(AddMassConstraintsZ, self).__init__()
+        self.mu_y = mu_y
+        self.si_y = si_y
+    def forward(self, y, x):
+        #sum y_t = 0
+        #sum y*si + mu = 0
+        #sub y*si = -sum mu
+        #y += -np.mean(y[...,:5],axis=-1)
+        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.sum(self.mu_y[:5])-torch.mean(y[:,:5],dim=1).unsqueeze(1))
+        
+        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.sum(self.mu_y[5:9])-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
+        
+        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.sum(self.mu_y[9:13])-torch.mean(y[:,9:13],dim=1).unsqueeze(1))
+        
+        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]-torch.sum(self.mu_y[13:17])-torch.mean(y[:,13:17],dim=1).unsqueeze(1))
+        
+                                           
+        return y
+    
+class AddMove(nn.Module): #for z scale
+    def __init__(self,mu_y, si_y):
+        super(AddMove, self).__init__()
+        self.mu_y = mu_y
+        self.si_y = si_y
+    def forward(self, y, x):
+        inds = [10]+[i for i in range(12,35)]
+        begin_inds = [0,5,9,13]
+        end_inds = [5,9,13,17]
+        #y += -np.mean(y[...,:5],axis=-1)
+        for begin,end in zip(begin_inds,end_inds):
+            y[...,begin:end] = 1/self.si_y[begin:end]*(y[:,begin:end]-torch.mean(y[:,begin:end],dim=1).unsqueeze(1))
+            y[...,begin:end] = move_species(y[...,begin:end],x[:,inds[begin:end]]+self.mu_y[begin:end]/self.si_y[begin:end])
+
+        #numbers relu
+        pos = self.relu1(y[:,17:24]+x[:,inds]+self.mu_y[17:24]/self.si_y[17:24])
+        y[:,17:24] = pos - (x[:,inds[17:24]] + self.mu_y[17:24]/self.si_y[17:24] )
+        
+        #dont forget pww
+        y[:,24:28] = self.relu2(y[:,24:28]+self.mu_y[24:28]/self.si_y[24:28])
+        return y
+    
+def move_species(y,x):
+    res = torch.zeros_like(y[:,0])
+    for i in range(y.shape[1]):
+        res,y[:,i] = move_res_to_next(res,y[:,i],x[:,i])
+    
+    for i in range(y.shape[1]):
+        #print(res.
+        res,y[:,y.shape[1]-1-i] = move_res_to_next(res,y[:,y.shape[1]-1-i],x[:,y.shape[1]-1-i])
+    
+def move_res_to_next(res,y,x):
+    #res, y, x have dim (samples,1)
+    # x is x + mu/si                                    
+    res_copy = res.clone()
+    res_new = (y + x).clone()
+    print(res_new.shape,res.shape)
+    y[res + res_new < 0]=-x[res + res_new < 0]
+    y[~(res + res_new < 0)] += -res[~(res + res_new < 0)]                                       
+    res_copy[res + res_new < 0] += res_new[res + res_new < 0]     
+    res_copy[~(res + res_new < 0)] = 0
+    return res_copy,y
     
 class MultMassConstraints(nn.Module): #for n scale
     def __init__(self,mu_y, si_y):
@@ -67,6 +133,12 @@ class Base(nn.Module):
         self.constraints = False
         if constraint=='add':
             self.constraints_layer = AddMassConstraints(mu_y,si_y)
+            self.constraints  = True
+        elif constraint=='addz':
+            self.constraints_layer = AddMassConstraintsZ(mu_y,si_y)
+            self.constraints = True                              
+        elif constraint=='add_move':
+            self.constraints_layer = AddMove(mu_y,si_y)
             self.constraints  = True
         elif constraint=='compl':
             self.constraints_layer = CompletionLayer(mu_y,si_y)
@@ -151,7 +223,7 @@ class CompletionLayer(nn.Module):
         self.si_y = si_y
         
     def forward(self,x,y):
-        #x_out = torch.clone(x)
+        x_out = torch.clone(x)
         x_out[:,4] =(- torch.sum(x[:,:4]*self.si_y[:4]+self.mu_y[:4], dim=1)-self.mu_y[4])/self.si_y[4]
         inds7 = [5,6,8]
         x_out[:,7] = (-torch.sum(x[:,inds7]*self.si_y[inds7]+self.mu_y[inds7], dim=1)-self.mu_y[7])/self.si_y[7]
@@ -167,10 +239,10 @@ class RandCompletionLayer(nn.Module):
         self.si_y = si_y
         
     def forward(self,x):
-        #x_out = torch.clone(x)
+        x_out = torch.clone(x)
         rand1 = np.randint(0,5)
         lis = [0,1,2,3,4]
-        lis.remore(rand1)
+        lis.remove(rand1)
         x_out[:,rand1] =(- torch.sum(x[:,lis]*self.si_y[lis]+self.mu_y[lis], dim=1)-self.mu_y[rand1])/self.si_y[rand1]
         inds7 = [5,6,7,8]
         rand2 = np.randint(5,9)
@@ -200,40 +272,64 @@ class CorrectionLayer(nn.Module):
         self.si_y = si_y
         self.mu_x = mu_x
         self.si_x = si_x
-        self.relu1 = nn.ReLU(inplace=False)
-        self.relu2 = nn.ReLU(inplace=False)
+        self.relu1 = nn.ReLU()
+        self.relu2 = nn.ReLU()
         
     def forward(self,y,x):
         inds = [10]+[i for i in range(12,35)]
-        y_orig = y[:,:28]*self.si_y[:28]+self.mu_y[:28] #output in original scal
+        '''y_orig = y[:,:28]*self.si_y[:28]+self.mu_y[:28] #output in original scal
         x_orig = x[:,inds]*self.si_x[inds]+self.mu_x[inds] #input in orginal scale
         pos = self.relu1(y_orig[:,:24]+x_orig)
         y1 = pos - x_orig 
         #print(np.mean((y1+x_orig).detach().cpu().numpy()<0,axis=0))
         #test past
         y_out = y.clone()
-        y_out[:,:24] = (y1-self.mu_y[:24])/self.si_y[:24]      
+        y_out[:,:24] = (y1-self.mu_y[:24])/self.si_y[:24]
+        y2 = y_out[:,:24]*self.si_y[:24]+self.mu_y[:24]
+        #print(y1-y2)
         #y_out[:,24:28] = self.relu2(y_orig[:,24:28])
         y_out[:,24:28] = (self.relu2(y_orig[:,24:28])-self.mu_y[24:28])/self.si_y[24:28]
-        print(np.mean((y_out[:,:24]*self.si_y[:24]+x[:,inds]*self.si_x[inds]+self.mu_x[inds]).detach().cpu().numpy()<0,axis=0))
+        print(np.mean((y_out[:,:24]*self.si_y[:24]+\
+                       self.mu_y[:24]+
+                       x[:,inds]*self.si_x[inds]+\
+                       self.mu_x[inds]).detach().cpu().numpy()<0,axis=0))'''
         #print(neg_fraction(x,y_out, self.mu_y, self.si_y, self.mu_x, self.si_x))
         #test failed
-        return y_out[:,:28]
+        x_orig = x[:,inds]*self.si_x[inds]+self.mu_x[inds] #input in orginal scale
+        pos = self.relu1(y[:,:24]+(x_orig/self.si_y[:24]+self.mu_y[:24]/self.si_y[:24]))
+        #print('neg scale 0',np.mean((pos).detach().cpu().numpy()<0,axis=0))
+        y[:,:24] = pos - (x_orig/self.si_y[:24] + self.mu_y[:24]/self.si_y[:24] )
+        #print('neg scale 0',np.mean((pos - (x_orig/self.si_y[:24] +self.mu_y[:24]/self.si_y[:24]) +(x_orig/self.si_y[:24]+self.mu_y[:24]/self.si_y[:24])).detach().cpu().numpy()<0,axis=0))
+        y[:,24:28] = self.relu2(y[:,24:28]+self.mu_y[24:28]/self.si_y[24:28])-self.mu_y[24:28]/self.si_y[24:28]
+        #print('neg scale 1',np.mean((y[:,:24]+(x_orig/self.si_y[:24]+self.mu_y[:24]/self.si_y[:24])).detach().cpu().numpy()<0,axis=0)) #pass
+        #print('neg scale 2',np.mean((y_orig[:,:24]+x_orig).detach().cpu().numpy()<0,axis=0)) #fail
+        #print('neg scale 3',np.mean(((y[:,:24]+x[:,inds])*self.si_y[:24]+self.mu_y[:24]).detach().cpu().numpy()<0,axis=0)) #fail
+        return y[:,:28]
     
 
 class CorrectionLayerNew(nn.Module):
-    def __init__(self, mu_x, si_x):
+    def __init__(self, mu_y, si_y):
         super(CorrectionLayerNew, self).__init__()
-        self.mu_x = mu_x
-        self.si_x = si_x
+        self.mu_y = mu_y
+        self.si_y = si_y
         self.relu1 = nn.ReLU()
         self.relu2 = nn.ReLU()
         
     def forward(self,y,x):
         inds = [10]+[i for i in range(12,35)]
-        pos = self.relu1(y[:,:24]+x[:,inds]+self.mu_x[:24]/self.si_x[:24])
-        y[:,:24] = pos - x[:,inds] - self.mu_x[:24]/self.si_x[:24]     
-        y[:,24:28] = self.relu2(y[:,24:28]+self.mu_x[24:28]/self.si_x[24:28])
+        #x_orig+yt_orig >=0
+        #z(x_orig)*sig+mu+yt*sig >=0
+        pos = self.relu1(y[:,:24]+x[:,inds]+self.mu_y[:24]/self.si_y[:24])
+        #print('neg scale 0',np.mean((pos).detach().cpu().numpy()<0,axis=0))
+        y[:,:24] = pos - (x[:,inds] + self.mu_y[:24]/self.si_y[:24] )
+        #print('neg scale 0',np.mean((pos - (x[:,inds] +self.mu_y[:24]/self.si_y[:24]) +(x[:,inds]+self.mu_y[:24]/self.si_y[:24])).detach().cpu().numpy()<0,axis=0))
+        y[:,24:28] = self.relu2(y[:,24:28]+self.mu_y[24:28]/self.si_y[24:28]) #error todo
+        y_orig = y[:,:28]*self.si_y[:28]#+self.mu_y[:28] #output in original scal
+        x_orig = x[:,inds]*self.si_y[:24]+self.mu_y[:24]
+        #
+        #print('neg scale 1',np.mean((y[:,:24]+(x[:,inds]+self.mu_y[:24]/self.si_y[:24])).detach().cpu().numpy()<0,axis=0)) #pass
+        #print('neg scale 2',np.mean((y_orig[:,:24]+x_orig).detach().cpu().numpy()<0,axis=0)) #fail
+        #print('neg scale 3',np.mean(((y[:,:24]+x[:,inds])*self.si_y[:24]+self.mu_y[:24]).detach().cpu().numpy()<0,axis=0)) #fail
         return y[:,:28]    
     
 class CompletionNN(nn.Module):
