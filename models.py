@@ -52,13 +52,37 @@ class AddMassConstraintsZ(nn.Module): #for z scale
         #sum y*si + mu = 0
         #sub y*si = -sum mu
         #y += -np.mean(y[...,:5],axis=-1)
-        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.sum(self.mu_y[:5])-torch.mean(y[:,:5],dim=1).unsqueeze(1))
+        #
+        #g = 1/si
+        #h_j(X) = -sum
+        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]-torch.mean(self.mu_y[:5])-torch.mean(y[:,:5],dim=1).unsqueeze(1))
         
-        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.sum(self.mu_y[5:9])-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
+        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]-torch.mean(self.mu_y[5:9])-torch.mean(y[:,5:9],dim=1).unsqueeze(1))
         
-        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.sum(self.mu_y[9:13])-torch.mean(y[:,9:13],dim=1).unsqueeze(1))
+        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]-torch.mean(self.mu_y[9:13])-torch.mean(y[:,9:13],dim=1).unsqueeze(1))
         
-        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]-torch.sum(self.mu_y[13:17])-torch.mean(y[:,13:17],dim=1).unsqueeze(1))
+        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]-torch.mean(self.mu_y[13:17])-torch.mean(y[:,13:17],dim=1).unsqueeze(1))
+        
+                                           
+        return y
+    
+class MultMassConstraintsZ(nn.Module): #for z scale
+    def __init__(self,mu_y, si_y):
+        super(MultMassConstraintsZ, self).__init__()
+        self.mu_y = mu_y
+        self.si_y = si_y
+    def forward(self, y, x):
+        #sum y_t = 0
+        #sum y*si + mu = 0
+        #sub y*si = -sum mu
+        #y += -np.mean(y[...,:5],axis=-1)
+        y[...,:5] = 1/self.si_y[:5]*(y[:,:5]*(-torch.sum(self.mu_y[:5]))/torch.sum(y[:,:5],dim=1).unsqueeze(1))
+        
+        y[...,5:9] = 1/self.si_y[5:9]*(y[:,5:9]*(-torch.sum(self.mu_y[5:9]))/torch.sum(y[:,5:9],dim=1).unsqueeze(1))
+        
+        y[...,9:13] = 1/self.si_y[9:13]*(y[:,9:13]*(-torch.sum(self.mu_y[9:13]))/torch.sum(y[:,9:13],dim=1).unsqueeze(1))
+        
+        y[...,13:17] = 1/self.si_y[13:17]*(y[:,13:17]*(-torch.sum(self.mu_y[13:17]))/torch.sum(y[:,13:17],dim=1).unsqueeze(1))
         
                                            
         return y
@@ -228,7 +252,7 @@ class CompletionLayer(nn.Module):
         inds7 = [5,6,8]
         x_out[:,7] = (-torch.sum(x[:,inds7]*self.si_y[inds7]+self.mu_y[inds7], dim=1)-self.mu_y[7])/self.si_y[7]
         inds11 = [10,11,12]
-        x_out[:,9] = (-torch.sum(x[:,inds11]*self.si_y[inds11]+self.mu_y[inds11], dim=1)-self.mu_y[11])/self.si_y[11]
+        x_out[:,9] = (-torch.sum(x[:,inds11]*self.si_y[inds11]+self.mu_y[inds11], dim=1)-self.mu_y[9])/self.si_y[9]
         x_out[:,13] = (-torch.sum(x[:,14:17]*self.si_y[14:17]+self.mu_y[14:17], dim=1)-self.mu_y[13])/self.si_y[13] 
         return x_out
     

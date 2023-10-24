@@ -335,7 +335,9 @@ def get_loss(output, y, args, x, stats):
     elif args.loss == 'mse_mass':
         return criterion(output[:,:28], y[:,:28]), overall_z_mass(output, args.scale, stats)
     elif args.loss == 'mse_relu':
-        return criterion(output[:,:28], y[:,:28])+relu_all(output)
+        return criterion(output[:,:28], y[:,:28])+relu_all(output,x), relu_all(output,x)
+    elif args.loss == 'mse_relu_mass':
+        return criterion(output[:,:28], y[:,:28])+relu_all(output,x)+overall_z_mass(output, args.scale, stats), relu_all(output,x)
     elif args.loss == 'mse_log_mass':
         return criterion(output, y)+torch.mean(mass_log(output))
     elif args.model == 'classification':
@@ -416,33 +418,35 @@ def overall_z_mass(y, scale, stats):
     return mass
     
 
-def relu_all(x):
-    so4_pos = relu_so4(x)
-    bc_pos = relu_bc(x)
-    oc_pos = relu_oc(x)
-    du_pos = relu_du(x)#
-    num_pos = relu_num(x)
-    wat_pos = relu_wat(x)
+def relu_all(y,x):
+    so4_pos = relu_so4(y,x)
+    bc_pos = relu_bc(y,x)
+    oc_pos = relu_oc(y,x)
+    du_pos = relu_du(y,x)#
+    num_pos = relu_num(y,x)
+    wat_pos = relu_wat(y,x)
+    #print(so4_pos, bc_pos ,oc_pos,du_pos,num_pos,wat_pos)
     pos = so4_pos + bc_pos + oc_pos + du_pos +num_pos +wat_pos
     return pos
 
-def relu_so4(x):
-    return 1e-11*torch.mean(F.relu(-(x[:,:5]*si_y[:5]+x[:,28:33]*si_x[8:13]+mu_y[:5]+mu_x[8:13]))**2)
+def relu_so4(y,x):
+    inds = [10]+[i for i in range(12,16)]
+    return 1e-7*torch.mean(F.relu(-(y[:,:5]*si_y[:5]+x[:,inds]*si_x[inds]+mu_y[:5]+mu_x[inds]))**2)
 
-def relu_bc(x):
-    return 1e+6*torch.mean(F.relu(-(x[:,5:9]*si_y[5:9]+x[:,33:37]*si_x[13:17]+mu_y[5:9]+mu_x[13:17]))**2)
+def relu_bc(y,x):
+    return 1e+11*torch.mean(F.relu(-(y[:,5:9]*si_y[5:9]+x[:,16:20]*si_x[16:20]+mu_y[5:9]+mu_x[16:20]))**2)
 
-def relu_oc(x):
-    return 1e+7*torch.mean(F.relu(-(x[:,9:13]*si_y[9:13]+x[:,37:41]*si_x[17:21]+mu_y[9:13]+mu_x[17:21]))**2)
+def relu_oc(y,x):
+    return 1e+6*torch.mean(F.relu(-(y[:,9:13]*si_y[9:13]+x[:,20:24]*si_x[20:24]+mu_y[9:13]+mu_x[20:24]))**2)
 
-def relu_du(x):
-    return 1e+3*torch.mean(F.relu(-(x[:,13:17]*si_y[13:17]+x[:,41:45]*si_x[21:25]+mu_y[13:17]+mu_x[21:25]))**2)
+def relu_du(y,x):
+    return 1e+7*torch.mean(F.relu(-(y[:,13:17]*si_y[13:17]+x[:,24:28]*si_x[24:28]+mu_y[13:17]+mu_x[24:28]))**2)
 
-def relu_num(x):
-    return 1e-8*torch.mean(F.relu(-(x[:,17:24]*si_y[17:24]+x[:,45:52]*si_x[25:32]+mu_y[17:24]+mu_x[25:32]))**2)
+def relu_num(y,x):
+    return 1e+1*torch.mean(F.relu(-(y[:,17:24]*si_y[17:24]+x[:,28:35]*si_x[28:35]+mu_y[17:24]+mu_x[28:35]))**2)
 
-def relu_wat(x):
-    return 1e+0*torch.mean(F.relu(-(x[:,24:28]*si_y[24:28]+mu_y[24:28]))**2)
+def relu_wat(y,x):
+    return 1e+18*torch.mean(F.relu(-(y[:,24:28]*si_y[24:28]+mu_y[24:28]))**2)
 
 
 #######training
